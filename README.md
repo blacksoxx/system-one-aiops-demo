@@ -155,19 +155,27 @@ looping") the model said `cluster-platform` at 0.69; when it read like an engine
 escalating is the design working**: the storefront alert is a side effect of checkout being down,
 and 37% confidence sent it to a human with a best guess instead of paging the web team.
 
-## Pairing with an LLM
+## Pairing with an LLM (Claude)
 
 Alerts in the Slack lane are the ones a human will read, so that is where a slow, expensive model
-earns its cost. Give the triage service any OpenAI-compatible endpoint and it writes a two-sentence
-note for each Slack-lane alert, using the System One model's answer as a hint:
+earns its cost. Give the triage service a Claude API key and two things happen:
+
+1. **A note for every Slack-lane alert**: two sentences on what probably happened and what to check
+   first, written by Claude with the System One answer as a hint. The fast model decides every
+   alert in about a second; Claude is only called for the ones it was not sure about.
+2. **An "LLM alone" comparison on every alert**: Claude answers the same five questions, and
+   dashboard 02 shows seconds per decision, tokens burnt and cost next to the System One numbers,
+   plus whether the two agree. It runs in the background, so the lanes keep their real latency.
 
 ```sh
-LLM_BASE_URL=http://localhost:11434/v1 LLM_MODEL=llama3.1 ./demo.sh up      # e.g. Ollama
-LLM_BASE_URL=https://api.openai.com/v1 LLM_API_KEY=sk-... LLM_MODEL=gpt-4o-mini ./demo.sh up
+export LLM_API_KEY=sk-ant-...            # your key, in your own shell; it goes into a Secret in the kind cluster
+LAYA_PORT=8600 ./demo.sh up              # defaults: provider anthropic, model claude-opus-5-5, comparison on
 ```
 
-The fast model decides every alert in about a second; the LLM is only called for the ones it was
-not sure about. That is the whole "fast, then slow" pattern in one line of configuration.
+Options: `LLM_MODEL=claude-sonnet-5-5` (cheaper), `LLM_COMPARE=0` (notes only), or any
+OpenAI-compatible server instead of Claude with `LLM_BASE_URL=http://host:port/v1 LLM_MODEL=...`.
+The Claude calls use the Messages API with `fallbacks: "default"` and low effort; a storm of five
+incidents costs a few cents with Opus. Nothing is sent anywhere when the key is not set.
 
 ## Using TypeSafe Jev instead
 

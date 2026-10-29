@@ -51,7 +51,30 @@ MODEL = os.environ.get("SYSTEMONE_MODEL") or None
 PORT = int(os.environ.get("PORT", "8400"))
 triage.API = os.environ.get("SYSTEMONE_BASE_URL", triage.API).rstrip("/")
 triage.PRICE_PER_MTOK = 0.0
-LLM = {k: os.environ.get(f"LLM_{k}") for k in ("BASE_URL", "API_KEY", "MODEL")}
+LLM = {k: os.environ.get(f"LLM_{k}") for k in ("PROVIDER", "BASE_URL", "API_KEY", "MODEL")}
+LLM["API_KEY"] = LLM["API_KEY"] or os.environ.get("ANTHROPIC_API_KEY")
+
+
+def _llm_provider():
+    if LLM["PROVIDER"]:
+        return LLM["PROVIDER"].lower()
+    if "anthropic.com" in (LLM["BASE_URL"] or "") or (LLM["MODEL"] or "").startswith("claude"):
+        return "anthropic"
+    if LLM["BASE_URL"]:
+        return "openai"  # any OpenAI-compatible server: Ollama, vLLM, OpenAI, ...
+    return "anthropic" if LLM["API_KEY"] else None
+
+
+LLM_PROVIDER = _llm_provider()
+if LLM_PROVIDER == "anthropic":
+    LLM["BASE_URL"] = (LLM["BASE_URL"] or "https://api.anthropic.com").rstrip("/")
+    LLM["MODEL"] = LLM["MODEL"] or "claude-opus-5-5"
+LLM_ON = bool(LLM_PROVIDER and LLM["MODEL"] and (LLM["API_KEY"] or LLM_PROVIDER == "openai"))
+LLM_COMPARE = LLM_ON and os.environ.get("LLM_COMPARE", "1").lower() not in ("0", "false", "no")
+
+# USD per million tokens (input, output); unknown models cost 0 in the display
+PRICES_PER_MTOK = {"claude-opus-5-5": (4.0, 20.0), "claude-opus-5": (5.0, 25.0), "claude-sonnet-5-5": (2.0, 10.0),
+                   "claude-sonnet-5": (2.0, 10.0), "claude-haiku-5-5": (0.10, 0.50), "claude-haiku-4-5": (1.0, 5.0)}
 
 POD_RULES = {"KubePodOOMKilled", "KubePodCrashLooping", "KubeContainerImagePullFailed", "KubePodNotReady",
              "KubePodRestartingOften", "CPUThrottlingHigh"}      # rules whose `pod` label is the pod in trouble
@@ -257,25 +280,130 @@ def lane_for(d):
     return "slack"
 
 
+def _price(model, tokens_in, tokens_out):
+    for prefix, (pi, po) in PRICES_PER_MTOK.items():
+        if model.startswith(prefix):
+            return (tokens_in * pi + tokens_out * po) / 1e6
+    return 0.0
+
+
+def llm_request(prompt, max_tokens=600, schema=None):
+    """One call to the configured LLM. Returns (text, meta) or ("", meta) on failure."""
+    t0 = time.time()
+    meta = {"model": LLM["MODEL"], "latency_s": 0.0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+    try:
+        if LLM_PROVIDER == "anthropic":
+            body = {"model": LLM["MODEL"], "max_tokens": max_tokens, "fallbacks": "default",
+                    "output_config": {"effort": "low", **({"format": {"type": "json_schema", "schema": schema}} if schema else {})},
+                    "messages": [{"role": "user", "content": prompt}]}
+            headers = {"Content-Type": "application/json", "x-api-key": LLM["API_KEY"], "anthropic-version": "2026-10-21",
+                       "anthropic-beta": "server-side-fallback-2026-07-01"}
+            req = urllib.request.Request(LLM["BASE_URL"] + "/v1/messages", data=json.dumps(body).encode(), headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=90) as r:
+                resp = json.load(r)
+            meta["model"] = resp.get("model", LLM["MODEL"])
+            usage = resp.get("usage", {})
+            meta["input_tokens"], meta["output_tokens"] = usage.get("input_tokens", 0), usage.get("output_tokens", 0)
+            text = "" if resp.get("stop_reason") == "refusal" else \
+                "".join(b.get("text", "") for b in resp.get("content", []) if b.get("type") == "text")
+        else:
+            body = {"model": LLM["MODEL"], "messages": [{"role": "user", "content": prompt}], "max_tokens": max_tokens}
+            if schema:
+                body["response_format"] = {"type": "json_object"}
+            headers = {"Content-Type": "application/json"}
+            if LLM["API_KEY"]:
+                headers["Authorization"] = f"Bearer {LLM['API_KEY']}"
+            req = urllib.request.Request(LLM["BASE_URL"].rstrip("/") + "/chat/completions", data=json.dumps(body).encode(),
+                                         headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=90) as r:
+                resp = json.load(r)
+            usage = resp.get("usage", {})
+            meta["input_tokens"], meta["output_tokens"] = usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
+            text = resp["choices"][0]["message"]["content"]
+    except urllib.error.HTTPError as e:
+        log(f"  llm {LLM_PROVIDER} HTTP {e.code}: {e.read().decode(errors='replace')[:200]}")
+        text = ""
+    except Exception as e:
+        log(f"  llm {LLM_PROVIDER} failed: {e}")
+        text = ""
+    meta["latency_s"] = round(time.time() - t0, 2)
+    meta["cost_usd"] = round(_price(meta["model"], meta["input_tokens"], meta["output_tokens"]), 6)
+    return text.strip(), meta
+
+
 def llm_note(state, d):
-    """Optional: a two-sentence note from an LLM for alerts a human will look at."""
-    if not (LLM["BASE_URL"] and LLM["MODEL"]):
-        return ""
+    """A two-sentence note for alerts a human will look at (the slow System 2 step, only where needed)."""
     prompt = (f"You are helping an on-call engineer. In two short sentences, say what most likely happened and the first "
               f"thing to check. A fast triage model suggests component '{d['component']}' ({d['p_component']:.0%}) and cause "
-              f"'{d['cause']}' ({d['p_cause']:.0%}); use that as a hint, not as truth.\n\nALERT:\n{state}")
-    body = {"model": LLM["MODEL"], "messages": [{"role": "user", "content": prompt}], "max_tokens": 120, "temperature": 0.2}
-    headers = {"Content-Type": "application/json"}
-    if LLM["API_KEY"]:
-        headers["Authorization"] = f"Bearer {LLM['API_KEY']}"
+              f"'{d['cause']}' ({d['p_cause']:.0%}); use that as a hint, not as truth. Plain text, no preamble.\n\nALERT:\n{state}")
+    return llm_request(prompt, max_tokens=600)
+
+
+DECISION_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "required": ["component", "cause", "actionable", "customer_impact", "severity"],
+    "properties": {
+        "component": {"type": "string", "enum": list(triage.COMPONENTS)},
+        "cause": {"type": "string", "enum": list(triage.CAUSES)},
+        "actionable": {"type": "boolean"},
+        "customer_impact": {"type": "boolean"},
+        "severity": {"type": "integer", "enum": [0, 1, 2, 3]},
+    },
+}
+
+
+def llm_decide(state):
+    """The same five questions, answered by the LLM alone: what 'System 2 for everything' costs."""
+    comps = "\n".join(f"- {k}: {v}" for k, v in triage.COMPONENTS.items())
+    causes = "\n".join(f"- {k}: {v}" for k, v in triage.CAUSES.items())
+    sev = "\n".join(f"- {i}: {s}" for i, s in enumerate(triage.SEVERITY))
+    prompt = (f"Triage this alert. Answer as JSON with exactly these fields.\n\n"
+              f"component: which component must be fixed (where the fix happens, not where the symptom shows). One of:\n{comps}\n\n"
+              f"cause: the most likely root cause. One of:\n{causes}\n\n"
+              f"actionable: does a human or automation need to act? customer_impact: are shoppers affected right now?\n"
+              f"severity: how urgent, as an integer:\n{sev}\n\nALERT:\n{state}")
+    text, meta = llm_request(prompt, max_tokens=1500, schema=DECISION_SCHEMA)
     try:
-        req = urllib.request.Request(LLM["BASE_URL"].rstrip("/") + "/chat/completions", data=json.dumps(body).encode(),
-                                     headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=40) as r:
-            return json.load(r)["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        log(f"  llm note failed: {e}")
-        return ""
+        ans = json.loads(text) if text else None
+    except json.JSONDecodeError:
+        ans = None
+    if ans is None:
+        return None, meta
+    return {"component": ans.get("component"), "cause": ans.get("cause"), "actionable": bool(ans.get("actionable")),
+            "customer_impact": bool(ans.get("customer_impact")), "severity": ans.get("severity")}, meta
+
+
+def llm_background(fp, state, d, lane, alertname, obj):
+    """Runs after the System One decision is already published: a note for the Slack lane and,
+    for comparison, the LLM's own answer to the same five questions."""
+    note, note_meta = (llm_note(state, d) if lane == "slack" else ("", None))
+    cmp, cmp_meta = (llm_decide(state) if LLM_COMPARE else (None, None))
+    with LOCK:
+        agg = STATE["llm"]
+        for m in (note_meta, cmp_meta):
+            if m:
+                agg["calls"] += 1
+                agg["tokens_in"] += m["input_tokens"]
+                agg["tokens_out"] += m["output_tokens"]
+                agg["cost_usd"] += m["cost_usd"]
+        if cmp_meta:
+            agg["decisions"] += 1
+            agg["latencies"].append(cmp_meta["latency_s"])
+        rec = STATE["open"].get(fp)
+        if rec is not None:
+            rec["note"] = note
+            if cmp is not None:
+                rec["llm"] = {**cmp, "model": cmp_meta["model"], "latency_s": cmp_meta["latency_s"],
+                              "tokens": cmp_meta["input_tokens"] + cmp_meta["output_tokens"], "cost_usd": cmp_meta["cost_usd"],
+                              "agree": cmp["component"] == d["component"]}
+                if rec["llm"]["agree"]:
+                    agg["agree"] += 1
+    if cmp is not None:
+        log(f"llm       {alertname} {obj} -> {cmp['component']} · {cmp['cause']} · {cmp_meta['latency_s']}s · "
+            f"{cmp_meta['input_tokens'] + cmp_meta['output_tokens']} tokens · ${cmp_meta['cost_usd']:.4f}"
+            + (" · agrees" if cmp["component"] == d["component"] else " · differs") + (" · note" if note else ""))
+    elif note:
+        log(f"llm       note for {alertname} {obj} · {note_meta['latency_s']}s")
 
 
 # ── state ───────────────────────────────────────────────────────────────────
@@ -288,6 +416,8 @@ STATE = {
     "history": [],   # last 50 events
     "latencies": [],
     "held": {},      # fingerprint -> (alert, since, object): symptoms waiting for their incident
+    "s1_tokens": 0,  # input tokens the System One model has read (it bills nothing on the way out)
+    "llm": {"calls": 0, "decisions": 0, "latencies": [], "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "agree": 0},
 }
 WORK = queue.Queue()
 
@@ -370,7 +500,7 @@ def triage_alert(am_alert, fp):
         return
     d = triage.decide(triage.calibrated(answers))
     lane = lane_for(d)
-    note = llm_note(state, d) if lane == "slack" else ""
+    note = ""
     team = triage.TEAMS.get(d["component"], d["component"])
     sev_label = triage.SEV_SHORT[min(3, round(d["severity"]))]
     rec = {"fp": fp, "ts": now(), "alertname": name, "object": obj, "severity": lab.get("severity", "?"),
@@ -378,14 +508,17 @@ def triage_alert(am_alert, fp):
            "component": d["component"], "p_component": round(d["p_component"], 2), "cause": d["cause"],
            "p_cause": round(d["p_cause"], 2), "actionable": d["actionable"], "p_actionable": round(d["p_actionable"], 2),
            "impact": round(d["impact"], 2), "severity_score": round(d["severity"], 2), "confidence": round(d["confidence"], 2),
-           "model": model, "latency_s": round(time.time() - t0, 2), "note": note}
+           "model": model, "latency_s": round(time.time() - t0, 2), "note": note, "tokens": tokens, "llm": None}
     with LOCK:
         STATE["open"][fp] = rec
         STATE["decisions"][lane] += 1
         STATE["latencies"].append(rec["latency_s"])
+        STATE["s1_tokens"] += tokens
+    if LLM_ON and (lane == "slack" or LLM_COMPARE):
+        threading.Thread(target=llm_background, args=(fp, state, d, lane, name, obj), daemon=True).start()
     remember({"ts": rec["ts"], "kind": lane, **{k: rec[k] for k in ("alertname", "object", "team", "component", "cause", "confidence")}})
     log(f"{lane:<6}    {name} {obj} -> {d['component']} ({d['p_component']:.0%}) · {d['cause']} ({d['p_cause']:.0%})"
-        f" · confidence {d['confidence']:.0%} · {rec['latency_s']}s" + (" · llm note" if note else ""))
+        f" · confidence {d['confidence']:.0%} · {rec['latency_s']}s")
 
 
 def sweeper():
@@ -444,13 +577,40 @@ def metrics_text():
         lines += ["# TYPE triage_alerts_received_total counter", f"triage_alerts_received_total {STATE['received']}",
                   "# TYPE triage_alerts_folded_total counter", f"triage_alerts_folded_total {STATE['folded']}",
                   "# TYPE triage_decision_latency_seconds gauge",
-                  f"triage_decision_latency_seconds {statistics.median(STATE['latencies']) if STATE['latencies'] else 0}"]
+                  f"triage_decision_latency_seconds {statistics.median(STATE['latencies']) if STATE['latencies'] else 0}",
+                  "# TYPE triage_s1_tokens_total counter", f"triage_s1_tokens_total {STATE['s1_tokens']}",
+                  "# TYPE triage_llm_configured gauge", f"triage_llm_configured {1 if LLM_ON else 0}"]
+        agg = STATE["llm"]
+        lines += ["# TYPE triage_llm_decisions_total counter", f"triage_llm_decisions_total {agg['decisions']}",
+                  "# TYPE triage_llm_agree_total counter", f"triage_llm_agree_total {agg['agree']}",
+                  "# TYPE triage_llm_tokens_total counter",
+                  f'triage_llm_tokens_total{{type="input"}} {agg["tokens_in"]}', f'triage_llm_tokens_total{{type="output"}} {agg["tokens_out"]}',
+                  "# TYPE triage_llm_cost_usd_total counter", f"triage_llm_cost_usd_total {agg['cost_usd']:.6f}",
+                  "# TYPE triage_llm_latency_seconds gauge",
+                  f"triage_llm_latency_seconds {statistics.median(agg['latencies']) if agg['latencies'] else 0}",
+                  "# HELP triage_llm_alert The LLM's own answer to the same alert; the value is its latency in seconds.",
+                  "# TYPE triage_llm_alert gauge"]
+        for a in STATE["open"].values():
+            L = a.get("llm")
+            if not L:
+                continue
+            labels = ",".join(f'{k}="{str(v).replace(chr(34), "")}"' for k, v in (
+                ("fingerprint", a["fp"]), ("alertname", a["alertname"]), ("object", a["object"]), ("summary", a["summary"][:120]),
+                ("component", L["component"]), ("cause", L["cause"]), ("agree", "yes" if L["agree"] else "no"),
+                ("s1_component", a["component"]), ("tokens", L["tokens"]), ("model", L["model"])))
+            lines.append(f"triage_llm_alert{{{labels}}} {L['latency_s']}")
     return "\n".join(lines) + "\n"
 
 
 def state_json():
     with LOCK:
+        agg = STATE["llm"]
         return json.dumps({"threshold": THRESHOLD, "model": MODEL or triage.API, "received": STATE["received"],
+                           "s1_tokens": STATE["s1_tokens"],
+                           "llm": {"on": LLM_ON, "compare": LLM_COMPARE, "provider": LLM_PROVIDER, "model": LLM["MODEL"],
+                                   "decisions": agg["decisions"], "agree": agg["agree"], "tokens": agg["tokens_in"] + agg["tokens_out"],
+                                   "cost_usd": round(agg["cost_usd"], 4),
+                                   "median_latency_s": round(statistics.median(agg["latencies"]), 2) if agg["latencies"] else None},
                            "folded": STATE["folded"], "decisions": STATE["decisions"],
                            "median_latency_s": round(statistics.median(STATE["latencies"]), 2) if STATE["latencies"] else None,
                            "raw": sorted(STATE["raw"].values(), key=lambda a: a["ts"], reverse=True),
@@ -495,7 +655,7 @@ let S=null;async function load(){try{S=await (await fetch('/state.json')).json()
 function esc(s){return String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 function pct(p){return Math.round(p*100)+'%'}
 function draw(){if(!S)return;const t=s=>s.slice(11,19);
-document.getElementById('meta').textContent='model '+S.model+' · threshold '+pct(S.threshold)+(S.median_latency_s?' · median '+S.median_latency_s+' s to decide':'');
+document.getElementById('meta').textContent='model '+S.model+' · threshold '+pct(S.threshold)+(S.median_latency_s?' · '+S.median_latency_s+' s per decision · '+S.s1_tokens+' tokens':'')+(S.llm&&S.llm.on&&S.llm.decisions?' · LLM alone ('+S.llm.model+'): '+S.llm.median_latency_s+' s per decision · '+S.llm.tokens+' tokens · $'+S.llm.cost_usd.toFixed(3):'');
 const open=S.open,by=l=>open.filter(a=>a.lane==l);
 if(T==1){document.getElementById('stats').innerHTML=`<div class="stat red"><div class="v">${S.raw.filter(a=>!a.folded).length+S.raw.filter(a=>a.folded).length}</div><div class="l">alerts firing right now</div></div>
 <div class="stat red"><div class="v">${S.raw.filter(a=>a.severity=='critical').length}</div><div class="l">critical</div></div>
@@ -508,7 +668,7 @@ else{document.getElementById('stats').innerHTML=`<div class="stat"><div class="v
 <div class="stat amber"><div class="v">${by('slack').length}</div><div class="l">posted to Slack</div></div>
 <div class="stat grey"><div class="v">${by('noise').length}</div><div class="l">closed as noise</div></div>`;
 const card=a=>`<div class="card"><div class="t">${esc(a.summary)}</div><div class="s">${esc(a.alertname)} · ${esc(a.object)} · ${t(a.ts)}</div>
-<div class="d">→ <b>${esc(a.team)}</b> · ${esc(a.component)} ${pct(a.p_component)} · ${esc(a.cause)} ${pct(a.p_cause)} · ${esc(a.sev_label)}<br>confidence <span class="bar"><i style="width:${pct(a.confidence)}"></i></span>${pct(a.confidence)}</div>${a.note?`<div class="n">${esc(a.note)}</div>`:''}</div>`;
+<div class="d">→ <b>${esc(a.team)}</b> · ${esc(a.component)} ${pct(a.p_component)} · ${esc(a.cause)} ${pct(a.p_cause)} · ${esc(a.sev_label)}<br>confidence <span class="bar"><i style="width:${pct(a.confidence)}"></i></span>${pct(a.confidence)}</div>${a.llm?`<div class="n" style="color:#9aa0a6">LLM alone (${esc(a.llm.model)}): ${esc(a.llm.component)} · ${esc(a.llm.cause)} · ${a.llm.latency_s} s · ${a.llm.tokens} tokens${a.llm.cost_usd?' · $'+a.llm.cost_usd.toFixed(4):''} · ${a.llm.agree?'agrees':'differs'}</div>`:''}${a.note?`<div class="n">${esc(a.note)}</div>`:''}</div>`;
 document.getElementById('main').innerHTML=`<div class="lanes">
 <div class="lane page"><h2>Page on-call · act now</h2>${by('page').map(card).join('')||'<div class="folded">nothing to page</div>'}</div>
 <div class="lane slack"><h2>Slack #ops · look when you can</h2>${by('slack').map(card).join('')||'<div class="folded">quiet</div>'}</div>
@@ -568,7 +728,7 @@ def main():
         log(f"WARNING model server {triage.API} not reachable yet: {e}")
     log(f"triage service on :{PORT} · namespace {NAMESPACE} · threshold {THRESHOLD:.0%} · "
         f"calibration {'on' if triage.CALIBRATION else 'off'} · kube api {'in-cluster' if kube.in_cluster else 'kubectl'}"
-        f" · llm notes {'on' if LLM['BASE_URL'] and LLM['MODEL'] else 'off'}")
+        f" · llm {('on: ' + LLM_PROVIDER + ' ' + LLM['MODEL'] + (', comparing every alert' if LLM_COMPARE else '')) if LLM_ON else 'off'}")
     ThreadingHTTPServer(("", PORT), Handler).serve_forever()
 
 
