@@ -13,10 +13,7 @@
 #   KUBECONFIG_FILE=~/.kube/shop-kind.yaml   kept separate from any other cluster you have
 #   LAYA_PORT=8000                     where your model server listens on this machine
 #   THRESHOLD=0.6                      act alone at or above this confidence
-#   LLM_API_KEY                        optional: Claude (Anthropic) key -> notes for the Slack lane and an
-#                                      "LLM alone" comparison on every alert. LLM_MODEL defaults to claude-opus-5-5.
-#   LLM_BASE_URL + LLM_MODEL           alternative: any OpenAI-compatible server (Ollama, vLLM, ...)
-#   LLM_COMPARE=0                      notes only, no comparison
+#   LLM_BASE_URL / LLM_API_KEY / LLM_MODEL   optional OpenAI-compatible LLM for Slack-lane notes
 set -eu
 cd "$(dirname "$0")"
 
@@ -85,14 +82,11 @@ EOF
     [ -f calibration.json ] && files="$files --from-file=calibration.json"
     # shellcheck disable=SC2086
     kubectl -n shop create configmap triage-code $files --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-    if [ -n "${LLM_API_KEY:-}${LLM_BASE_URL:-}" ]; then
-      kubectl -n shop create secret generic llm --from-literal=LLM_PROVIDER="${LLM_PROVIDER:-}" \
-        --from-literal=LLM_BASE_URL="${LLM_BASE_URL:-}" --from-literal=LLM_API_KEY="${LLM_API_KEY:-}" \
-        --from-literal=LLM_MODEL="${LLM_MODEL:-}" --from-literal=LLM_COMPARE="${LLM_COMPARE:-1}" \
+    if [ -n "${LLM_BASE_URL:-}" ]; then
+      kubectl -n shop create secret generic llm --from-literal=LLM_BASE_URL="$LLM_BASE_URL" \
+        --from-literal=LLM_API_KEY="${LLM_API_KEY:-}" --from-literal=LLM_MODEL="${LLM_MODEL:-}" \
         --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-      echo "   llm: ${LLM_PROVIDER:-anthropic} ${LLM_MODEL:-claude-opus-5-5}${LLM_BASE_URL:+ via $LLM_BASE_URL} (notes for the Slack lane + comparison on every alert)"
-    else
-      kubectl -n shop delete secret llm --ignore-not-found >/dev/null
+      echo "   llm notes: $LLM_MODEL via $LLM_BASE_URL"
     fi
     sed "s/__LAYA_PORT__/$LAYA_PORT/; s/__THRESHOLD__/$THRESHOLD/" k8s/triage.yaml | kubectl apply -f - >/dev/null
     kubectl apply -f k8s/monitoring/rules.yaml -f k8s/monitoring/dashboards.yaml >/dev/null
