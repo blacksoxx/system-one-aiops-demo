@@ -131,7 +131,7 @@ minutes after the command, the two dashboards showed the same minute like this:
 | | |
 |---|---|
 | ![01 · Alerts · today](docs/img/dashboard-01-today.png) | ![02 · Alerts · triaged](docs/img/dashboard-02-triaged.png) |
-| **Today:** 13 alerts firing, 3 critical, six rules, no order. | **Triaged:** 16 received, 10 folded as symptoms, 1 paged, 4 to Slack, 1 closed as noise, 1.4 s per decision. |
+| **Today:** 12 alerts firing, 3 critical, six rules, no order. | **Triaged:** 16 received, 10 folded as symptoms, 1 paged, 4 to Slack, 1 closed as noise, 1.4 s per decision. |
 
 What the model decided, incident by incident:
 
