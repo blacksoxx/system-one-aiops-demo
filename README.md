@@ -176,10 +176,40 @@ In the second:
 python3 triage.py log
 ```
 
-Each incident produces an alert within seconds to a minute (the `for:` windows are 15 s for
-unavailable deployments and 25 s for jobs, so the job can show its retry). The third incident is
-the interesting one: the alert is about `checkout`, but the fix is `orders-db`. Watch whether the
-model routes to the Data team or escalates.
+Run one incident at a time and `heal` between them: the services depend on each other, so
+incidents cascade (storefront fails its health check when checkout is down) and two overlapping
+incidents on the same service produce one confusing alert. Each incident produces an alert within
+seconds to a minute (the `for:` windows are 15 s for unavailable deployments and 25 s for jobs, so
+the job can show its retry), and an alert resolves 60 s after its condition disappears. The third
+incident is the interesting one: the alert is about `checkout`, but the fix is `orders-db`. Watch
+whether the model routes to the Data team or escalates.
+
+What live runs looked like on a laptop CPU with Laya `typed-decisions`, calibrated, threshold 0.7,
+one incident at a time with `heal` in between:
+
+```
+16:25:50  KubePodOOMKilled                   deployment/catalog     catalog     out-of-memory          71%  AUTO-ROUTE → Catalog team
+16:34:02  KubePodCrashLooping                deployment/checkout    checkout    bad-config-or-deploy   65%  ESCALATE
+16:36:36  KubeDeploymentReplicasUnavailable  deployment/checkout    checkout    dependency-down        35%  ESCALATE
+16:36:42  KubeDeploymentReplicasUnavailable  deployment/storefront  storefront  dependency-down        34%  ESCALATE
+16:29:36  KubeJobFailed                      job/nightly-report     orders-db   transient-noise        57%  ESCALATE
+```
+
+Each incident produced exactly one alert; the storefront line is a real cascade, because storefront
+fails its own health check while checkout is down. The OOM was routed automatically with the right
+component and cause. The crash loop got the right component (`checkout`, 0.75) and cause (0.65) but
+stayed under the threshold, so a human got it with that head start. The hard case did what a
+cautious system should: the model saw checkout's logs full of `connection timed out (orders-db)`,
+did not commit to `orders-db` (0.45 for checkout, 0.35 for dependency-down), and escalated instead
+of paging the wrong team.
+
+Two lessons from these runs are built in. First, **phrasing matters**: when the crash-loop alert
+read like a Kubernetes rule ("Pod checkout-59fc… is crash looping"), the model answered
+`cluster-platform` with 0.69; when it read like an engineer's note ("checkout: the application
+exits right after it starts… its last log lines are below"), the same model answered `checkout`.
+The watcher writes alerts the second way. Second, an uncertain model escalating is the correct
+outcome, not a failure. If you want more automation, lower `--threshold` and accept more wrong
+automatic decisions, or fit the calibration on more of your own labelled alerts.
 
 The watcher stands in for Prometheus and Alertmanager so the demo moves fast. It emits alerts in
 Alertmanager's webhook shape, so pointing a real Alertmanager at the same code is a small change.

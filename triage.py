@@ -455,6 +455,8 @@ def cmd_ask(args):
 
 # ── watch: live cluster events → alerts ─────────────────────────────────────
 
+RESOLVE_AFTER = 60  # seconds a condition must stay gone before the alert is resolved (crash loops flicker)
+
 FOR_SECONDS = {  # like Alertmanager's `for:`, how long a condition must hold before it fires
     "KubePodOOMKilled": 0,
     "KubePodCrashLooping": 0,
@@ -515,31 +517,38 @@ def scan(kube, namespace):
     """Look at the namespace once and return {key: candidate alert} for every active condition."""
     found = {}
     pods, deps, jobs = kube.get("pods"), kube.get("deployments"), kube.get("jobs")
+    not_ready = {}  # deployment -> a running pod that is failing its readiness probe
 
     for pod in pods["items"]:
         kind, owner = owner_of(pod)
         pname = pod["metadata"]["name"]
         for cs in pod.get("status", {}).get("containerStatuses", []):
             cname, restarts = cs["name"], cs.get("restartCount", 0)
+            if kind == "deployment" and not cs.get("ready") and (cs.get("state") or {}).get("running"):
+                not_ready.setdefault(owner, (pname, cname))
             last = (cs.get("lastState") or {}).get("terminated") or {}
             waiting = (cs.get("state") or {}).get("waiting") or {}
             if last.get("reason") == "OOMKilled":
                 found[f"{owner}/oom"] = {
                     "labels": {"alertname": "KubePodOOMKilled", "severity": "critical", "namespace": namespace,
                                kind: owner, "pod": pname},
-                    "annotations": {"summary": f"Container {cname} in pod {pname} was OOMKilled",
-                                    "description": f"The container exceeded its memory limit of {memory_limit(pod, cname)} "
-                                                   f"and was killed by the kernel. Restart count {restarts}."},
+                    "annotations": {"summary": f"{owner}: container killed for exceeding its memory limit "
+                                               f"(OOMKilled, {restarts} restarts)",
+                                    "description": f"The {owner} service's process grew past its memory limit of "
+                                                   f"{memory_limit(pod, cname)} and was killed by the kernel. Kubernetes "
+                                                   f"restarts it and it happens again. Its last log lines are below."},
                     "logs": lambda p=pname, c=cname: kube.logs(p, "-c", c, previous=True),
                 }
             elif waiting.get("reason") == "CrashLoopBackOff":
                 found[f"{owner}/crashloop"] = {
                     "labels": {"alertname": "KubePodCrashLooping", "severity": "warning", "namespace": namespace,
                                kind: owner, "pod": pname},
-                    "annotations": {"summary": f"Pod {pname} is crash looping",
-                                    "description": f"The container exits shortly after starting (last exit code "
-                                                   f"{last.get('exitCode', '?')}) and has restarted {restarts} times. "
-                                                   f"The deployment was updated just before this started."},
+                    "annotations": {"summary": f"{owner}: the application exits right after it starts "
+                                               f"(CrashLoopBackOff, {restarts} restarts)",
+                                    "description": f"The {owner} service's own process exits with code "
+                                                   f"{last.get('exitCode', '?')} a moment after starting, every time. This "
+                                                   f"began right after a new {owner} configuration or version was rolled "
+                                                   f"out. Its last log lines are below."},
                     "logs": lambda p=pname, c=cname: kube.logs(p, "-c", c, previous=True),
                 }
 
@@ -552,10 +561,11 @@ def scan(kube, namespace):
             found[f"{name}/unavailable"] = {
                 "labels": {"alertname": "KubeDeploymentReplicasUnavailable",
                            "severity": "critical" if have == 0 else "warning", "namespace": namespace, "deployment": name},
-                "annotations": {"summary": f"Deployment {name} has {have} of {want} replicas available",
-                                "description": "Pods are running but failing their readiness probe. "
-                                               + (f"Last probe result: {msg}" if msg else "")},
-                "logs": lambda n=name: kube.logs(f"deployment/{n}"),
+                "annotations": {"summary": f"{name}: {have} of {want} instances are healthy",
+                                "description": f"The {name} service's instances are running but failing their health "
+                                               f"check{(': ' + msg) if msg else ''}. Its last log lines are below."},
+                "logs": (lambda pc=not_ready[name]: kube.logs(pc[0], "-c", pc[1])) if name in not_ready
+                        else (lambda n=name: kube.logs(f"deployment/{n}")),
             }
 
     for j in jobs["items"]:
@@ -566,9 +576,10 @@ def scan(kube, namespace):
             found[f"{name}/jobfailed"] = {
                 "labels": {"alertname": "KubeJobFailed", "severity": "info" if succeeded else "warning",
                            "namespace": namespace, "job": name},
-                "annotations": {"summary": f"Job {name} failed {failed} time(s)" + (", then succeeded on retry" if succeeded else ""),
-                                "description": "The retry succeeded and the output was produced. No data is missing."
-                                               if succeeded else "A retry is pending (backoff)."},
+                "annotations": {"summary": f"{name}: batch job failed {failed} time(s)"
+                                           + (", then succeeded on retry" if succeeded else ""),
+                                "description": "The retry succeeded and the report was produced. No data is missing."
+                                               if succeeded else "A retry is pending (backoff). Its log lines are below."},
                 "logs": lambda n=name: kube.logs("-l", f"job-name={n}", "--prefix", tail=8),
                 "_settled": bool(succeeded),
             }
@@ -583,7 +594,7 @@ def cmd_watch(args):
                                                             f" · calibration {'on' if CALIBRATION and not args.mock else 'off'}"
                                                             f" · every {args.interval}s · decisions → {args.log}"))
     print(dim("  Conditions: OOMKilled, CrashLoopBackOff, deployment replicas unavailable, job failed. Ctrl-C to stop.\n"))
-    active, pending = {}, {}
+    active, pending, missing = {}, {}, {}
     log_path = HERE / args.log
     while True:
         now = time.time()
@@ -609,9 +620,13 @@ def cmd_watch(args):
                                     "decision": d, "route": r, "team": TEAMS.get(d["component"]), **meta}) + "\n")
             active[key] = alert
         for key in list(active):
-            if key not in found:
+            if key in found:
+                missing.pop(key, None)
+                continue
+            if now - missing.setdefault(key, now) >= RESOLVE_AFTER:
                 print(dim(f"  resolved: {key}  {time.strftime('%H:%M:%S')}"))
                 del active[key]
+                del missing[key]
         for key in list(pending):
             if key not in found:
                 del pending[key]
@@ -627,7 +642,8 @@ def cmd_log(args):
     for r in rows:
         lab = r["alert"]["labels"]
         d = r["decision"]
-        print(f"  {r['ts'][11:19]}  {lab['alertname']:<34} {alert_object(r['alert']):<26} "
+        local = datetime.fromisoformat(r["ts"]).astimezone().strftime("%H:%M:%S")
+        print(f"  {local}  {lab['alertname']:<34} {alert_object(r['alert']):<26} "
               f"{d['component']:<18} {d['cause']:<21} {d['confidence']:4.0%}  {ROUTE_STYLE[r['route']](r['route'])}")
     routes = [r["route"] for r in rows]
     lat = sorted(r["latency_s"] for r in rows)
@@ -639,6 +655,10 @@ def cmd_log(args):
 
 def main():
     global API
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except AttributeError:
+        pass
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("command", choices=["check", "replay", "watch", "ask", "log"])
     p.add_argument("--base-url", default=None, help=f"Jev-compatible server (default {API})")
