@@ -4,6 +4,7 @@
 #   ./demo.sh up        kind cluster (own kubeconfig) + Prometheus/Alertmanager/Grafana + the shop
 #                       + alert rules + dashboards + the triage service wired to your model server
 #   ./demo.sh open      port-forward Grafana (3000) and the triage board (8400), print the URLs
+#   ./demo.sh reset     zero the triage counters and lanes (before going on stage)
 #   ./demo.sh status    what is running
 #   ./demo.sh down      delete the cluster
 #
@@ -107,6 +108,13 @@ EOF
     kubectl -n shop port-forward svc/triage 8400:8400 >/dev/null 2>&1 &
     kubectl -n monitoring port-forward svc/mon-kube-prometheus-stack-alertmanager 9093:9093 >/dev/null 2>&1 &
     wait
+    ;;
+  reset)
+    need kubectl
+    echo "== restarting the triage service: counters and lanes back to zero"
+    kubectl -n shop rollout restart deployment/triage >/dev/null
+    kubectl -n shop rollout status deployment/triage --timeout=120s >/dev/null
+    echo "   done"
     ;;
   status)
     kubectl get nodes

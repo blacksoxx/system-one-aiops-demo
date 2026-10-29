@@ -16,22 +16,22 @@ spec:
       rules:
         - alert: KubePodOOMKilled
           expr: |
-            kube_pod_container_status_last_terminated_reason{namespace="shop", reason="OOMKilled"} == 1
+            max by (namespace, pod, container) (kube_pod_container_status_last_terminated_reason{namespace="shop", reason="OOMKilled"} == 1)
             and on (namespace, pod, container)
-            increase(kube_pod_container_status_restarts_total{namespace="shop"}[10m]) > 0
+            max by (namespace, pod, container) (increase(kube_pod_container_status_restarts_total{namespace="shop"}[10m])) > 0
           labels: { severity: critical }
           annotations:
             summary: "Container {{ $labels.container }} in pod {{ $labels.pod }} was OOMKilled"
             description: "The container exceeded its memory limit and was killed."
         - alert: KubePodCrashLooping
-          expr: kube_pod_container_status_waiting_reason{namespace="shop", reason="CrashLoopBackOff"} == 1
+          expr: max by (namespace, pod, container) (kube_pod_container_status_waiting_reason{namespace="shop", reason="CrashLoopBackOff"} == 1)
           for: 20s
           labels: { severity: warning }
           annotations:
             summary: "Pod {{ $labels.pod }} is crash looping"
             description: "Container {{ $labels.container }} keeps exiting shortly after start."
         - alert: KubeContainerImagePullFailed
-          expr: kube_pod_container_status_waiting_reason{namespace="shop", reason=~"ImagePullBackOff|ErrImagePull"} == 1
+          expr: max by (namespace, pod, container) (kube_pod_container_status_waiting_reason{namespace="shop", reason=~"ImagePullBackOff|ErrImagePull"} == 1)
           for: 20s
           labels: { severity: warning }
           annotations:
@@ -39,8 +39,9 @@ spec:
             description: "Container {{ $labels.container }} is waiting on an image that cannot be pulled."
         - alert: KubeDeploymentReplicasUnavailable
           expr: |
-            (kube_deployment_spec_replicas{namespace="shop"} > 0)
-            and (kube_deployment_status_replicas_available{namespace="shop"} < kube_deployment_spec_replicas{namespace="shop"})
+            max by (namespace, deployment) (kube_deployment_spec_replicas{namespace="shop"}) > 0
+            and max by (namespace, deployment) (kube_deployment_status_replicas_available{namespace="shop"})
+              < max by (namespace, deployment) (kube_deployment_spec_replicas{namespace="shop"})
           for: 30s
           labels: { severity: critical }
           annotations:
@@ -48,22 +49,22 @@ spec:
             description: "Fewer replicas are available than desired."
         - alert: KubePodNotReady
           expr: |
-            kube_pod_status_ready{namespace="shop", condition="false"} == 1
-            and on (namespace, pod) kube_pod_status_phase{namespace="shop", phase="Running"} == 1
+            max by (namespace, pod) (kube_pod_status_ready{namespace="shop", condition="false"} == 1)
+            and on (namespace, pod) max by (namespace, pod) (kube_pod_status_phase{namespace="shop", phase="Running"} == 1)
           for: 45s
           labels: { severity: warning }
           annotations:
             summary: "Pod {{ $labels.pod }} is not ready"
             description: "The pod is running but failing its readiness probe."
         - alert: KubePodRestartingOften
-          expr: increase(kube_pod_container_status_restarts_total{namespace="shop"}[5m]) > 2
+          expr: max by (namespace, pod, container) (increase(kube_pod_container_status_restarts_total{namespace="shop"}[5m])) > 2
           for: 30s
           labels: { severity: warning }
           annotations:
             summary: "Pod {{ $labels.pod }} restarted {{ $value | humanize }} times in 10 minutes"
             description: "Container {{ $labels.container }} is restarting repeatedly."
         - alert: KubeJobFailed
-          expr: kube_job_status_failed{namespace="shop"} > 0
+          expr: max by (namespace, job_name) (kube_job_status_failed{namespace="shop"}) > 0
           for: 15s
           labels: { severity: warning }
           annotations:

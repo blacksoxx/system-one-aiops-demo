@@ -84,6 +84,7 @@ Open **http://localhost:3000/d/alerts-today** and **http://localhost:3000/d/aler
 export KUBECONFIG=~/.kube/shop-kind.yaml
 ./chaos.sh storm            # five incidents within a minute
 ./chaos.sh heal             # when you have seen enough
+./demo.sh reset             # zero the triage counters and lanes before the next run
 ```
 
 Monitoring takes 30–90 s to notice, like in real life. Then dashboard 01 fills with red, and
@@ -124,23 +125,35 @@ optimistic by construction; the live incidents are the out-of-sample check. `dem
 
 ## What a live storm looked like
 
-Laptop CPU, Laya `typed-decisions`, calibrated, threshold 0.6. Five incidents, `./chaos.sh storm`:
+Laptop CPU, Laya `typed-decisions`, calibrated, threshold 0.6, `./chaos.sh storm`. About two
+minutes after the command, the two dashboards showed the same minute like this:
+
+| | |
+|---|---|
+| ![01 · Alerts · today](docs/img/dashboard-01-today.png) | ![02 · Alerts · triaged](docs/img/dashboard-02-triaged.png) |
+| **Today:** 13 alerts firing, 3 critical, six rules, no order. | **Triaged:** 16 received, 10 folded as symptoms, 1 paged, 4 to Slack, 1 closed as noise, 1.4 s per decision. |
+
+What the model decided, incident by incident:
 
 ```
-dashboard 01   firing alerts: see the run notes in the talk; one incident fires 2–4 rules
-dashboard 02   catalog · out-of-memory · Catalog team · fix today            → paged
-               checkout · dependency-down (orders-db timeouts in its logs)  → Slack, best guess attached
-               storefront · dependency-down (cascade from checkout)         → Slack
-               cart · bad-config-or-deploy (image not found)                 → Slack or paged, depending on confidence
-               nightly-report · transient-noise, retry succeeded            → closed as noise
+catalog     out of memory            → PAGE   Catalog team · out-of-memory 98% · confidence 76%
+cart        image tag does not exist → SLACK  best guess cart 80% · bad-config-or-deploy · 53%
+orders-db   scaled to zero           → SLACK  "checkout: 0 of 2 instances healthy" · dependency-down · 42%
+                                     → SLACK  "storefront: 0 of 2 healthy" (the cascade) · storefront 89% · 37%
+payments    CPU throttled            → SLACK  payments-provider 68% · 40%
+nightly job failed once, retry ok    → NOISE  transient-noise · confidence 59% · nobody paged
+pod not ready, restarting often,
+crash loop after the OOM kill        → folded into the incidents above (10 notifications)
 ```
 
-Two things worth knowing. **Phrasing matters**: when the crash-loop alert read like a Kubernetes
-rule ("Pod checkout-59fc… is crash looping") the model said `cluster-platform` at 0.69; when it
-read like an engineer's note ("checkout: the application exits right after it starts… its last log
-lines are below") it said `checkout` at 0.86. The triage service writes alerts the second way.
-And **an uncertain model escalating is the design working**: the storefront alert is a side effect
-of checkout being down, and 32% confidence sent it to a human instead of paging the web team.
+Three things worth knowing. **One incident is several alerts**: five incidents produced
+sixteen alert notifications, and ten of those were symptoms the service folded back into their incident. **Phrasing
+matters**: when the crash-loop alert read like a Kubernetes rule ("Pod checkout-59fc… is crash
+looping") the model said `cluster-platform` at 0.69; when it read like an engineer's note
+("checkout: the application exits right after it starts… its last log lines are below") it said
+`checkout` at 0.86, so the service writes alerts the second way. And **an uncertain model
+escalating is the design working**: the storefront alert is a side effect of checkout being down,
+and 37% confidence sent it to a human with a best guess instead of paging the web team.
 
 ## Pairing with an LLM
 

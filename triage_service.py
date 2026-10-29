@@ -339,6 +339,14 @@ def triage_alert(am_alert, fp):
         if fp in STATE["raw"]:
             STATE["raw"][fp]["summary"] = summary
             STATE["raw"][fp]["object"] = obj
+        # one open incident per service: a second rule firing on the same object (OOM then crash loop,
+        # image pull then replicas unavailable) is the same incident, not a new decision
+        same = [a for a in STATE["open"].values() if a["object"] == obj and a["alertname"] not in CHILD_ALERTS]
+        if name not in CHILD_ALERTS and same and same[0]["alertname"] != name:
+            STATE["folded"] += 1
+            STATE["raw"][fp]["folded"] = True
+            log(f"folded    {name} {obj} into the open {same[0]['alertname']} incident")
+            return
         if name not in CHILD_ALERTS:  # a real incident folds any held or open symptom on the same service
             for k, (_, _, hobj) in list(STATE["held"].items()):
                 if hobj == obj:
@@ -505,7 +513,7 @@ document.getElementById('main').innerHTML=`<div class="lanes">
 <div class="lane page"><h2>Page on-call · act now</h2>${by('page').map(card).join('')||'<div class="folded">nothing to page</div>'}</div>
 <div class="lane slack"><h2>Slack #ops · look when you can</h2>${by('slack').map(card).join('')||'<div class="folded">quiet</div>'}</div>
 <div class="lane noise"><h2>Closed as noise · nobody paged</h2>${by('noise').map(card).join('')||'<div class="folded">no noise yet</div>'}</div></div>`}}
-load();setInterval(load,2000);
+tab(T);setInterval(load,2000);
 </script></body></html>"""
 
 
