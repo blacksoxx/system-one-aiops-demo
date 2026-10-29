@@ -6,7 +6,7 @@ with kubectl access. Every firing alert from Alertmanager is rewritten in plain 
 enriched with the pod's recent logs, sent to the model with five typed questions, and sorted:
 
   page   confident, actionable, serious            -> page the owning team, cause attached
-  slack  not confident enough to act alone         -> post to a channel with the model's best guess
+  slack  not confident enough to act alone         -> post to a channel with the model's best guess for a human
   noise  confident that nothing needs doing        -> close it, keep it for audit, page nobody
 
 Alerts that are symptoms of an already-open alert on the same service (pod not ready, pod
@@ -23,8 +23,6 @@ Environment
   SYSTEMONE_BASE_URL  model server, e.g. http://laya:8600/v1        SYSTEMONE_MODEL   e.g. typed-decisions
   TRIAGE_THRESHOLD    act alone at or above this confidence (0.6)   TRIAGE_NAMESPACE  shop
   PORT                8400
-  LLM_BASE_URL, LLM_API_KEY, LLM_MODEL  optional OpenAI-compatible endpoint; writes a two-sentence
-                      note for alerts in the slack lane (the slow System 2 step, only where needed)
 """
 
 import json
@@ -51,7 +49,6 @@ MODEL = os.environ.get("SYSTEMONE_MODEL") or None
 PORT = int(os.environ.get("PORT", "8400"))
 triage.API = os.environ.get("SYSTEMONE_BASE_URL", triage.API).rstrip("/")
 triage.PRICE_PER_MTOK = 0.0
-LLM = {k: os.environ.get(f"LLM_{k}") for k in ("BASE_URL", "API_KEY", "MODEL")}
 
 POD_RULES = {"KubePodOOMKilled", "KubePodCrashLooping", "KubeContainerImagePullFailed", "KubePodNotReady",
              "KubePodRestartingOften", "CPUThrottlingHigh"}      # rules whose `pod` label is the pod in trouble
@@ -257,27 +254,6 @@ def lane_for(d):
     return "slack"
 
 
-def llm_note(state, d):
-    """Optional: a two-sentence note from an LLM for alerts a human will look at."""
-    if not (LLM["BASE_URL"] and LLM["MODEL"]):
-        return ""
-    prompt = (f"You are helping an on-call engineer. In two short sentences, say what most likely happened and the first "
-              f"thing to check. A fast triage model suggests component '{d['component']}' ({d['p_component']:.0%}) and cause "
-              f"'{d['cause']}' ({d['p_cause']:.0%}); use that as a hint, not as truth.\n\nALERT:\n{state}")
-    body = {"model": LLM["MODEL"], "messages": [{"role": "user", "content": prompt}], "max_tokens": 120, "temperature": 0.2}
-    headers = {"Content-Type": "application/json"}
-    if LLM["API_KEY"]:
-        headers["Authorization"] = f"Bearer {LLM['API_KEY']}"
-    try:
-        req = urllib.request.Request(LLM["BASE_URL"].rstrip("/") + "/chat/completions", data=json.dumps(body).encode(),
-                                     headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=40) as r:
-            return json.load(r)["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        log(f"  llm note failed: {e}")
-        return ""
-
-
 # ── state ───────────────────────────────────────────────────────────────────
 
 LOCK = threading.Lock()
@@ -370,7 +346,6 @@ def triage_alert(am_alert, fp):
         return
     d = triage.decide(triage.calibrated(answers))
     lane = lane_for(d)
-    note = llm_note(state, d) if lane == "slack" else ""
     team = triage.TEAMS.get(d["component"], d["component"])
     sev_label = triage.SEV_SHORT[min(3, round(d["severity"]))]
     rec = {"fp": fp, "ts": now(), "alertname": name, "object": obj, "severity": lab.get("severity", "?"),
@@ -378,14 +353,14 @@ def triage_alert(am_alert, fp):
            "component": d["component"], "p_component": round(d["p_component"], 2), "cause": d["cause"],
            "p_cause": round(d["p_cause"], 2), "actionable": d["actionable"], "p_actionable": round(d["p_actionable"], 2),
            "impact": round(d["impact"], 2), "severity_score": round(d["severity"], 2), "confidence": round(d["confidence"], 2),
-           "model": model, "latency_s": round(time.time() - t0, 2), "note": note}
+           "model": model, "latency_s": round(time.time() - t0, 2)}
     with LOCK:
         STATE["open"][fp] = rec
         STATE["decisions"][lane] += 1
         STATE["latencies"].append(rec["latency_s"])
     remember({"ts": rec["ts"], "kind": lane, **{k: rec[k] for k in ("alertname", "object", "team", "component", "cause", "confidence")}})
     log(f"{lane:<6}    {name} {obj} -> {d['component']} ({d['p_component']:.0%}) · {d['cause']} ({d['p_cause']:.0%})"
-        f" · confidence {d['confidence']:.0%} · {rec['latency_s']}s" + (" · llm note" if note else ""))
+        f" · confidence {d['confidence']:.0%} · {rec['latency_s']}s")
 
 
 def sweeper():
@@ -508,7 +483,7 @@ else{document.getElementById('stats').innerHTML=`<div class="stat"><div class="v
 <div class="stat amber"><div class="v">${by('slack').length}</div><div class="l">posted to Slack</div></div>
 <div class="stat grey"><div class="v">${by('noise').length}</div><div class="l">closed as noise</div></div>`;
 const card=a=>`<div class="card"><div class="t">${esc(a.summary)}</div><div class="s">${esc(a.alertname)} · ${esc(a.object)} · ${t(a.ts)}</div>
-<div class="d">→ <b>${esc(a.team)}</b> · ${esc(a.component)} ${pct(a.p_component)} · ${esc(a.cause)} ${pct(a.p_cause)} · ${esc(a.sev_label)}<br>confidence <span class="bar"><i style="width:${pct(a.confidence)}"></i></span>${pct(a.confidence)}</div>${a.note?`<div class="n">${esc(a.note)}</div>`:''}</div>`;
+<div class="d">→ <b>${esc(a.team)}</b> · ${esc(a.component)} ${pct(a.p_component)} · ${esc(a.cause)} ${pct(a.p_cause)} · ${esc(a.sev_label)}<br>confidence <span class="bar"><i style="width:${pct(a.confidence)}"></i></span>${pct(a.confidence)}</div></div>`;
 document.getElementById('main').innerHTML=`<div class="lanes">
 <div class="lane page"><h2>Page on-call · act now</h2>${by('page').map(card).join('')||'<div class="folded">nothing to page</div>'}</div>
 <div class="lane slack"><h2>Slack #ops · look when you can</h2>${by('slack').map(card).join('')||'<div class="folded">quiet</div>'}</div>
@@ -568,7 +543,7 @@ def main():
         log(f"WARNING model server {triage.API} not reachable yet: {e}")
     log(f"triage service on :{PORT} · namespace {NAMESPACE} · threshold {THRESHOLD:.0%} · "
         f"calibration {'on' if triage.CALIBRATION else 'off'} · kube api {'in-cluster' if kube.in_cluster else 'kubectl'}"
-        f" · llm notes {'on' if LLM['BASE_URL'] and LLM['MODEL'] else 'off'}")
+        )
     ThreadingHTTPServer(("", PORT), Handler).serve_forever()
 
 

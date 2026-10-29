@@ -8,7 +8,7 @@ probabilities instead of text**, and the decisions sort the flood into three lan
 | Lane | When | What happens |
 |---|---|---|
 | **Page on-call** | confident, actionable, serious | the owning team is paged, cause attached |
-| **Slack #ops** | not confident enough to act alone | posted with the model's best guess; an LLM can add a two-line note |
+| **Slack #ops** | not confident enough to act alone | posted with the model's best guess, for a human to pick up |
 | **Closed as noise** | confident nothing needs doing | closed, kept for audit, nobody paged |
 
 Two Grafana dashboards show the same minute twice: **today** (every alert, a wall of red) and
@@ -43,7 +43,7 @@ It speaks the same API as TypeSafe's Jev, so the code works against either.
 | `k8s/monitoring/rules.yaml` | Prometheus alert rules shaped like a real team's: one incident, several alerts. |
 | `k8s/monitoring/dashboards.yaml` | The two Grafana dashboards. |
 | `monitoring/values.yaml` | kube-prometheus-stack tuned for a demo (10 s scrape, 5 s grouping). |
-| `triage_service.py`, `k8s/triage.yaml` | Alertmanager webhook → plain-language alert + logs → model → lanes → metrics. Also serves its own board at `/board`. |
+| `triage_service.py`, `k8s/triage.yaml` | Alertmanager webhook → plain-language alert + logs → model → lanes → Prometheus metrics. Also serves its own board at `/board`. |
 | `triage.py` | The CLI: `check`, `replay`, `watch`, `ask`, `log`. Shared decision logic. |
 | `alerts.json`, `taxonomy.json`, `calibrate.py` | 30 labelled alerts for scoring, components → teams, temperature calibration. |
 | `scripts/serve-laya.sh` | Runs Laya's `typed-decisions` checkpoint behind a Jev-compatible API. |
@@ -154,20 +154,6 @@ looping") the model said `cluster-platform` at 0.69; when it read like an engine
 `checkout` at 0.86, so the service writes alerts the second way. And **an uncertain model
 escalating is the design working**: the storefront alert is a side effect of checkout being down,
 and 37% confidence sent it to a human with a best guess instead of paging the web team.
-
-## Pairing with an LLM
-
-Alerts in the Slack lane are the ones a human will read, so that is where a slow, expensive model
-earns its cost. Give the triage service any OpenAI-compatible endpoint and it writes a two-sentence
-note for each Slack-lane alert, using the System One model's answer as a hint:
-
-```sh
-LLM_BASE_URL=http://localhost:11434/v1 LLM_MODEL=llama3.1 ./demo.sh up      # e.g. Ollama
-LLM_BASE_URL=https://api.openai.com/v1 LLM_API_KEY=sk-... LLM_MODEL=gpt-4o-mini ./demo.sh up
-```
-
-The fast model decides every alert in about a second; the LLM is only called for the ones it was
-not sure about. That is the whole "fast, then slow" pattern in one line of configuration.
 
 ## Using TypeSafe Jev instead
 

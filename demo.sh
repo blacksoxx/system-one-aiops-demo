@@ -13,7 +13,6 @@
 #   KUBECONFIG_FILE=~/.kube/shop-kind.yaml   kept separate from any other cluster you have
 #   LAYA_PORT=8000                     where your model server listens on this machine
 #   THRESHOLD=0.6                      act alone at or above this confidence
-#   LLM_BASE_URL / LLM_API_KEY / LLM_MODEL   optional OpenAI-compatible LLM for Slack-lane notes
 set -eu
 cd "$(dirname "$0")"
 
@@ -82,12 +81,6 @@ EOF
     [ -f calibration.json ] && files="$files --from-file=calibration.json"
     # shellcheck disable=SC2086
     kubectl -n shop create configmap triage-code $files --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-    if [ -n "${LLM_BASE_URL:-}" ]; then
-      kubectl -n shop create secret generic llm --from-literal=LLM_BASE_URL="$LLM_BASE_URL" \
-        --from-literal=LLM_API_KEY="${LLM_API_KEY:-}" --from-literal=LLM_MODEL="${LLM_MODEL:-}" \
-        --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-      echo "   llm notes: $LLM_MODEL via $LLM_BASE_URL"
-    fi
     sed "s/__LAYA_PORT__/$LAYA_PORT/; s/__THRESHOLD__/$THRESHOLD/" k8s/triage.yaml | kubectl apply -f - >/dev/null
     kubectl apply -f k8s/monitoring/rules.yaml -f k8s/monitoring/dashboards.yaml >/dev/null
     kubectl -n shop rollout restart deployment/triage >/dev/null 2>&1 || true
