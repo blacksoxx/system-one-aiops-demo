@@ -146,7 +146,28 @@ pod not ready, restarting often,
 crash loop after the OOM kill        → folded into the incidents above (10 notifications)
 ```
 
-Three things worth knowing. **One incident is several alerts**: five incidents produced
+With Claude enabled, the same storm also ran through Claude Opus 5.5 for comparison:
+
+![02 · with the LLM comparison row](docs/img/dashboard-02-with-llm-comparison.png)
+
+```
+                      System One (Laya, this laptop)      LLM alone (Claude Opus 5.5)
+decisions             6                                   6
+seconds per decision  3.6 (no GPU; ~0.05 on one)          2.2
+tokens                10k read, nothing generated         13k
+cost                  $0.00, nothing leaves the machine   $0.08 for the storm
+agreement                                                 3 of 6 same component
+hard case (orders-db) checkout 55% → Slack lane            orders-db, dependency-down (right)
+```
+
+Read that honestly. On a laptop that is also running the cluster, the small model is **not**
+faster than a frontier model in a data centre; its speed advantage needs a GPU (the independent
+benchmark on Jev: 13× faster). What it buys you here is cost, data locality and a confidence you
+can threshold on. And the LLM got the hard case right, which is exactly why uncertain alerts go
+to the Slack lane with an LLM note instead of being decided alone. Fast model for the flood, slow
+model where it earns its cost.
+
+Three things worth knowing.Three things worth knowing. **One incident is several alerts**: five incidents produced
 sixteen alert notifications, and ten of those were symptoms the service folded back into their incident. **Phrasing
 matters**: when the crash-loop alert read like a Kubernetes rule ("Pod checkout-59fc… is crash
 looping") the model said `cluster-platform` at 0.69; when it read like an engineer's note
