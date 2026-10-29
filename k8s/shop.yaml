@@ -1,0 +1,165 @@
+# The demo shop: six services, one image, one script (services/app.py, mounted from the
+# ConfigMap that deploy.sh creates). Every service answers JSON and checks its dependencies.
+#
+#   storefront -> catalog, cart, checkout
+#   checkout   -> orders-db, payments
+#
+# Memory limits are deliberately modest so the "oom" incident is quick.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: storefront, namespace: shop, labels: { app: storefront, tier: web } }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: storefront } }
+  template:
+    metadata: { labels: { app: storefront, tier: web } }
+    spec:
+      containers:
+        - name: storefront
+          image: python:3.12-slim
+          command: ["python3", "-u", "/app/app.py"]
+          env:
+            - { name: SERVICE_NAME, value: storefront }
+            - { name: DEPENDS_ON, value: "catalog=http://catalog:8080/healthz,cart=http://cart:8080/healthz,checkout=http://checkout:8080/healthz" }
+          ports: [{ containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /healthz, port: 8080 }, periodSeconds: 5, failureThreshold: 2 }
+          resources: { requests: { cpu: 20m, memory: 48Mi }, limits: { memory: 128Mi } }
+          volumeMounts: [{ name: app, mountPath: /app }]
+      volumes: [{ name: app, configMap: { name: app-code } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: storefront, namespace: shop }
+spec: { selector: { app: storefront }, ports: [{ port: 80, targetPort: 8080 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: catalog, namespace: shop, labels: { app: catalog, tier: backend } }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: catalog } }
+  template:
+    metadata: { labels: { app: catalog, tier: backend } }
+    spec:
+      containers:
+        - name: catalog
+          image: python:3.12-slim
+          command: ["python3", "-u", "/app/app.py"]
+          env:
+            - { name: SERVICE_NAME, value: catalog }
+          ports: [{ containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /healthz, port: 8080 }, periodSeconds: 5, failureThreshold: 2 }
+          resources: { requests: { cpu: 20m, memory: 48Mi }, limits: { memory: 128Mi } }
+          volumeMounts: [{ name: app, mountPath: /app }]
+      volumes: [{ name: app, configMap: { name: app-code } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: catalog, namespace: shop }
+spec: { selector: { app: catalog }, ports: [{ port: 8080, targetPort: 8080 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: cart, namespace: shop, labels: { app: cart, tier: backend } }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: cart } }
+  template:
+    metadata: { labels: { app: cart, tier: backend } }
+    spec:
+      containers:
+        - name: cart
+          image: python:3.12-slim
+          command: ["python3", "-u", "/app/app.py"]
+          env:
+            - { name: SERVICE_NAME, value: cart }
+          ports: [{ containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /healthz, port: 8080 }, periodSeconds: 5, failureThreshold: 2 }
+          resources: { requests: { cpu: 20m, memory: 48Mi }, limits: { memory: 128Mi } }
+          volumeMounts: [{ name: app, mountPath: /app }]
+      volumes: [{ name: app, configMap: { name: app-code } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: cart, namespace: shop }
+spec: { selector: { app: cart }, ports: [{ port: 8080, targetPort: 8080 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: checkout, namespace: shop, labels: { app: checkout, tier: backend } }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: checkout } }
+  template:
+    metadata: { labels: { app: checkout, tier: backend } }
+    spec:
+      containers:
+        - name: checkout
+          image: python:3.12-slim
+          command: ["python3", "-u", "/app/app.py"]
+          env:
+            - { name: SERVICE_NAME, value: checkout }
+            - { name: DEPENDS_ON, value: "orders-db=http://orders-db:8080/healthz,payments=http://payments:8080/healthz" }
+          ports: [{ containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /healthz, port: 8080 }, periodSeconds: 5, failureThreshold: 2 }
+          resources: { requests: { cpu: 20m, memory: 48Mi }, limits: { memory: 128Mi } }
+          volumeMounts: [{ name: app, mountPath: /app }]
+      volumes: [{ name: app, configMap: { name: app-code } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: checkout, namespace: shop }
+spec: { selector: { app: checkout }, ports: [{ port: 8080, targetPort: 8080 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: orders-db, namespace: shop, labels: { app: orders-db, tier: data } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: orders-db } }
+  template:
+    metadata: { labels: { app: orders-db, tier: data } }
+    spec:
+      containers:
+        - name: orders-db
+          image: python:3.12-slim
+          command: ["python3", "-u", "/app/app.py"]
+          env:
+            - { name: SERVICE_NAME, value: orders-db }
+          ports: [{ containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /healthz, port: 8080 }, periodSeconds: 5, failureThreshold: 2 }
+          resources: { requests: { cpu: 20m, memory: 48Mi }, limits: { memory: 128Mi } }
+          volumeMounts: [{ name: app, mountPath: /app }]
+      volumes: [{ name: app, configMap: { name: app-code } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: orders-db, namespace: shop }
+spec: { selector: { app: orders-db }, ports: [{ port: 8080, targetPort: 8080 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: payments, namespace: shop, labels: { app: payments, tier: external } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: payments } }
+  template:
+    metadata: { labels: { app: payments, tier: external } }
+    spec:
+      containers:
+        - name: payments
+          image: python:3.12-slim
+          command: ["python3", "-u", "/app/app.py"]
+          env:
+            - { name: SERVICE_NAME, value: payments }
+          ports: [{ containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /healthz, port: 8080 }, periodSeconds: 5, failureThreshold: 2 }
+          resources: { requests: { cpu: 20m, memory: 48Mi }, limits: { memory: 128Mi } }
+          volumeMounts: [{ name: app, mountPath: /app }]
+      volumes: [{ name: app, configMap: { name: app-code } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: payments, namespace: shop }
+spec: { selector: { app: payments }, ports: [{ port: 8080, targetPort: 8080 }] }

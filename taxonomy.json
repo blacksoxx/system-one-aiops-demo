@@ -1,0 +1,29 @@
+{
+  "components": {
+    "storefront":        { "description": "The web frontend users talk to; it calls catalog, cart and checkout", "team": "Web team" },
+    "catalog":           { "description": "Product catalogue and search service", "team": "Catalog team" },
+    "cart":              { "description": "Shopping cart service and its session store", "team": "Cart team" },
+    "checkout":          { "description": "Order placement service; it calls orders-db and the payments provider", "team": "Checkout team" },
+    "orders-db":         { "description": "The orders database: replication, failover, connections, data volumes, and its batch jobs", "team": "Data team" },
+    "payments-provider": { "description": "The external payments API the shop depends on; not operated by us", "team": "Vendor ticket: payments provider" },
+    "cluster-platform":  { "description": "Kubernetes itself: nodes, scheduling, disks, node OS, monitoring", "team": "Platform team" },
+    "network":           { "description": "DNS, ingress, load balancers, certificates, links to other networks", "team": "Network team" }
+  },
+  "causes": {
+    "out-of-memory":        "A process exceeded its memory limit and was killed",
+    "bad-config-or-deploy": "A recent release, config edit or credential rotation broke it",
+    "dependency-down":      "This component is healthy but something it depends on is failing",
+    "network-connectivity": "Packets are not getting through: loss, timeouts, disconnects",
+    "disk-pressure":        "A disk or volume is full, filling up, or too slow",
+    "certificate-expiry":   "A TLS certificate is expiring or failed to renew",
+    "load-spike":           "More traffic than the current capacity can serve",
+    "hardware-fault":       "A node or device has a hardware fault",
+    "transient-noise":      "Self-resolved, expected, or harmless; nothing to fix"
+  },
+  "severity": [
+    "No action needed",
+    "Fix during working hours",
+    "Fix today: service is degraded",
+    "Page now: outage or data at risk"
+  ]
+}

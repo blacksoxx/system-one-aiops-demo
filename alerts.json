@@ -1,0 +1,212 @@
+[
+  {
+    "id": "S01",
+    "labels": {"alertname": "KubePodOOMKilled", "severity": "critical", "namespace": "shop", "deployment": "catalog", "pod": "catalog-7c9d6f-x2k4p"},
+    "annotations": {"summary": "Container catalog in pod catalog-7c9d6f-x2k4p was OOMKilled", "description": "The container exceeded its memory limit of 128Mi and was killed by the kernel. Restart count 4 in the last 20 minutes, since the in-memory product cache was enabled."},
+    "logs": ["catalog: warming in-memory cache: allocating 200 MiB", "catalog: cache warm-up 150/200 MiB", "Killed"],
+    "truth": {"component": "catalog", "cause": "out-of-memory", "actionable": true, "difficulty": "easy"}
+  },
+  {
+    "id": "S02",
+    "labels": {"alertname": "KubePodCrashLooping", "severity": "warning", "namespace": "shop", "deployment": "checkout", "pod": "checkout-5d8b9-m8z2c"},
+    "annotations": {"summary": "Pod checkout-5d8b9-m8z2c is crash looping", "description": "The container exits with code 1 right after start and has restarted 7 times in 10 minutes. Started immediately after deployment checkout was updated."},
+    "logs": ["checkout: invalid config: unknown field 'retry_polciy' in config.yaml line 14", "checkout: exiting"],
+    "truth": {"component": "checkout", "cause": "bad-config-or-deploy", "actionable": true, "difficulty": "easy"}
+  },
+  {
+    "id": "S03",
+    "labels": {"alertname": "KubeDeploymentReplicasUnavailable", "severity": "critical", "namespace": "shop", "deployment": "checkout"},
+    "annotations": {"summary": "Deployment checkout has 0 of 2 replicas available", "description": "Pods are running but failing their readiness probe. Last probe result: HTTP probe failed with statuscode: 503. Deployment orders-db has 0 ready pods."},
+    "logs": ["checkout: connection timed out after 2000 ms (orders-db)", "checkout: GET /healthz 503", "checkout: POST /checkout 504 (dependency orders-db unreachable)"],
+    "truth": {"component": "orders-db", "cause": "dependency-down", "actionable": true, "difficulty": "hard"}
+  },
+  {
+    "id": "S04",
+    "labels": {"alertname": "KubeJobFailed", "severity": "info", "namespace": "shop", "job": "nightly-report"},
+    "annotations": {"summary": "Job nightly-report failed 1 time(s), then succeeded on retry", "description": "The retry succeeded two minutes later and the report was produced. No data is missing."},
+    "logs": ["nightly-report: connection reset by peer while fetching orders", "nightly-report: retry ok, 1,204 rows written"],
+    "truth": {"component": "orders-db", "cause": "transient-noise", "actionable": false, "difficulty": "hard"}
+  },
+  {
+    "id": "S05",
+    "labels": {"alertname": "CheckoutPaymentErrors", "severity": "critical", "namespace": "shop", "deployment": "checkout"},
+    "annotations": {"summary": "41% of payment calls from checkout are failing", "description": "Every failure is an HTTP 502 from the payments provider's API. The provider's status page reports an ongoing incident. Checkout itself is healthy."},
+    "logs": ["checkout: payments POST /v2/charge 502 Bad Gateway (provider)", "checkout: payments POST /v2/charge 502 Bad Gateway (provider)"],
+    "truth": {"component": "payments-provider", "cause": "dependency-down", "actionable": true, "difficulty": "easy"}
+  },
+  {
+    "id": "S06",
+    "labels": {"alertname": "CertificateExpiringSoon", "severity": "warning", "namespace": "shop", "ingress": "shop-public"},
+    "annotations": {"summary": "Certificate for shop.example.com expires in 5 days", "description": "cert-manager's last renewal attempt failed: the ACME HTTP-01 challenge returned 403 from the public ingress."},
+    "logs": ["cert-manager: failed to perform self check GET http://shop.example.com/.well-known/acme-challenge/...: 403"],
+    "truth": {"component": "network", "cause": "certificate-expiry", "actionable": true, "difficulty": "easy"}
+  },
+  {
+    "id": "S07",
+    "labels": {"alertname": "NodeDiskFillingUp", "severity": "warning", "namespace": "shop", "node": "worker-2"},
+    "annotations": {"summary": "Filesystem /var on worker-2 is predicted to fill up within 9 hours", "description": "91% used and growing 4 GB per hour. The largest consumer is the container image cache."},
+    "logs": ["du: /var/lib/containerd 612G"],
+    "truth": {"component": "cluster-platform", "cause": "disk-pressure", "actionable": true, "difficulty": "easy"}
+  },
+  {
+    "id": "S08",
+    "labels": {"alertname": "CartHighLatency", "severity": "warning", "namespace": "shop", "deployment": "cart"},
+    "annotations": {"summary": "cart p95 latency is 2.9s (threshold 1s)", "description": "Request rate tripled in the last 15 minutes after a marketing email. All cart pods are at their CPU limit and the autoscaler is at its maximum replica count."},
+    "logs": ["cart: request queue depth 340", "cart: GET /cart 200 in 2840ms"],
+    "truth": {"component": "cart", "cause": "load-spike", "actionable": true, "difficulty": "easy"}
+  },
+  {
+    "id": "S09",
+    "labels": {"alertname": "KubePodNotReady", "severity": "warning", "namespace": "shop", "deployment": "storefront", "pod": "storefront-6f7c-pl9vd"},
+    "annotations": {"summary": "Pod storefront-6f7c-pl9vd has been not ready for 90 seconds", "description": "Readiness probe failed twice during start-up while the pod warmed its template cache. The pod became ready and the alert resolved on its own."},
+    "logs": ["storefront: readiness probe failed: HTTP probe failed with statuscode: 503", "storefront: warming template cache... done", "storefront: listening on :8080"],
+    "truth": {"component": "storefront", "cause": "transient-noise", "actionable": false, "difficulty": "easy"}
+  },
+  {
+    "id": "S10",
+    "labels": {"alertname": "StorefrontHighErrorRate", "severity": "critical", "namespace": "shop", "deployment": "storefront"},
+    "annotations": {"summary": "storefront 5xx rate is 18% over 5 minutes", "description": "All errors are timeouts calling the catalog service. Catalog pods have been restarting with OOMKilled for the last 10 minutes."},
+    "logs": ["storefront: connection timed out after 2000 ms (catalog)", "storefront: GET /products 504 (dependency catalog unreachable)"],
+    "truth": {"component": "catalog", "cause": "out-of-memory", "actionable": true, "difficulty": "hard"}
+  },
+  {
+    "id": "S11",
+    "labels": {"alertname": "OrdersDbReplicationLag", "severity": "warning", "namespace": "shop", "deployment": "orders-db"},
+    "annotations": {"summary": "orders-db replica is 95s behind the primary", "description": "Replication lag above 60s for 10 minutes. Disk write latency on the node hosting the replica rose at the same time."},
+    "logs": ["orders-db: replication lag 95s", "orders-db: slow checkpoint 41s, fsync latency 820ms"],
+    "truth": {"component": "orders-db", "cause": "disk-pressure", "actionable": true, "difficulty": "hard"}
+  },
+  {
+    "id": "S12",
+    "labels": {"alertname": "CPUThrottlingHigh", "severity": "info", "namespace": "shop", "deployment": "storefront"},
+    "annotations": {"summary": "26% CPU throttling for container storefront", "description": "Throttling above 25% for 15 minutes. Latency and error rate are normal."},
+    "logs": ["storefront: GET / 200 in 48ms", "storefront: GET /products 200 in 61ms"],
+    "truth": {"component": "storefront", "cause": "transient-noise", "actionable": false, "difficulty": "easy"}
+  },
+  {
+    "id": "S13",
+    "labels": {"alertname": "DNSResolutionFailures", "severity": "critical", "namespace": "shop", "deployment": "coredns"},
+    "annotations": {"summary": "CoreDNS SERVFAIL rate is 35%", "description": "Lookups for external names fail intermittently. CoreDNS forwards to the upstream resolver time out; lookups for in-cluster services succeed."},
+    "logs": ["coredns: [ERROR] plugin/errors: 2 api.payments-provider.example. A: read udp 10.42.0.9:51234->10.10.0.2:53: i/o timeout"],
+    "truth": {"component": "network", "cause": "network-connectivity", "actionable": true, "difficulty": "hard"}
+  },
+  {
+    "id": "S14",
+    "labels": {"alertname": "KubeDeploymentReplicasMismatch", "severity": "warning", "namespace": "shop", "deployment": "catalog"},
+    "annotations": {"summary": "Deployment catalog has not matched its expected replicas for 3 minutes", "description": "2 of 3 replicas available during a rolling update. The third pod was scheduled 40 seconds ago and is pulling its image."},
+    "logs": ["Pulling image registry.example.com/catalog:3.2.1", "Successfully pulled image in 38s"],
+    "truth": {"component": "catalog", "cause": "transient-noise", "actionable": false, "difficulty": "hard"}
+  },
+  {
+    "id": "S15",
+    "labels": {"alertname": "CheckoutClientErrorSpike", "severity": "info", "namespace": "shop", "deployment": "checkout"},
+    "annotations": {"summary": "checkout 4xx rate rose to 40%", "description": "All errors are 400 'coupon code expired'. A promotional email with an expired code went out 20 minutes ago. Checkout is otherwise healthy."},
+    "logs": ["checkout: POST /checkout 400 coupon SUMMER25 expired", "checkout: POST /checkout 400 coupon SUMMER25 expired"],
+    "truth": {"component": "checkout", "cause": "transient-noise", "actionable": false, "difficulty": "hard"}
+  },
+  {
+    "id": "S16",
+    "labels": {"alertname": "KubeContainerWaiting", "severity": "warning", "namespace": "shop", "deployment": "cart", "pod": "cart-8a1f2-qq7tz"},
+    "annotations": {"summary": "Container cart in pod cart-8a1f2-qq7tz has been waiting for 12 minutes", "description": "Reason ImagePullBackOff. The image tag referenced by the new release does not exist in the registry."},
+    "logs": ["Failed to pull image \"registry.example.com/cart:2.4.0-rc1\": not found"],
+    "truth": {"component": "cart", "cause": "bad-config-or-deploy", "actionable": true, "difficulty": "easy"}
+  },
+  {
+    "id": "S17",
+    "labels": {"alertname": "IngressHighLatency", "severity": "warning", "namespace": "shop", "ingress": "shop-public"},
+    "annotations": {"summary": "p99 latency on the public ingress is 8s", "description": "Latency is high for every route, including /healthz which does no work. 4% packet loss between the cluster and the upstream gateway."},
+    "logs": ["ingress: upstream response time 7912ms", "mtr: 4.1% loss at hop 2 (gw.datacenter.example)"],
+    "truth": {"component": "network", "cause": "network-connectivity", "actionable": true, "difficulty": "hard"}
+  },
+  {
+    "id": "S18",
+    "labels": {"alertname": "KubePodOOMKilled", "severity": "warning", "namespace": "shop", "job": "nightly-report", "pod": "nightly-report-k8s7d"},
+    "annotations": {"summary": "Container report in pod nightly-report-k8s7d was OOMKilled", "description": "The job processed a 2 GB export and exceeded its 512Mi limit. First occurrence; the export doubled in size this month."},
+    "logs": ["nightly-report: loading orders export (2.1 GB)", "Killed"],
+    "truth": {"component": "orders-db", "cause": "out-of-memory", "actionable": true, "difficulty": "easy"}
+  },
+  {
+    "id": "S19",
+    "labels": {"alertname": "PersistentVolumeFillingUp", "severity": "critical", "namespace": "shop", "deployment": "orders-db"},
+    "annotations": {"summary": "Volume orders-db-data is 96% full", "description": "Less than 4% space left. The database will stop accepting writes when the volume is full."},
+    "logs": ["orders-db: disk space low, 1.8 GB free"],
+    "truth": {"component": "orders-db", "cause": "disk-pressure", "actionable": true, "difficulty": "easy"}
+  },
+  {
+    "id": "S20",
+    "labels": {"alertname": "TargetDown", "severity": "warning", "namespace": "shop", "service": "kube-state-metrics"},
+    "annotations": {"summary": "100% of kube-state-metrics targets are down", "description": "Prometheus cannot scrape kube-state-metrics. Other targets on the same node scrape fine."},
+    "logs": ["prometheus: Get \"http://10.42.0.17:8080/metrics\": context deadline exceeded"],
+    "truth": {"component": "cluster-platform", "cause": "network-connectivity", "actionable": true, "difficulty": "hard"}
+  },
+  {
+    "id": "S21",
+    "labels": {"alertname": "CheckoutPaymentTimeouts", "severity": "warning", "namespace": "shop", "deployment": "checkout"},
+    "annotations": {"summary": "30% of payment calls from checkout time out", "description": "The payments provider's API is answering in 9 seconds. Their status page shows 'degraded performance'. Checkout and orders-db are healthy."},
+    "logs": ["checkout: payments POST /v2/charge timeout after 8000 ms (provider)"],
+    "truth": {"component": "payments-provider", "cause": "dependency-down", "actionable": true, "difficulty": "easy"}
+  },
+  {
+    "id": "S22",
+    "labels": {"alertname": "KubeAPIErrorBudgetBurn", "severity": "warning", "namespace": "shop", "service": "kube-apiserver"},
+    "annotations": {"summary": "The API server is burning its error budget", "description": "The error rate rose briefly during an etcd snapshot and recovered within 3 minutes."},
+    "logs": ["etcd: snapshot saved: snapshot-20261029-0200", "apiserver: request latency back to baseline"],
+    "truth": {"component": "cluster-platform", "cause": "transient-noise", "actionable": false, "difficulty": "hard"}
+  },
+  {
+    "id": "S23",
+    "labels": {"alertname": "CatalogSearchErrors", "severity": "critical", "namespace": "shop", "deployment": "catalog"},
+    "annotations": {"summary": "catalog search is returning 500 on 60% of requests", "description": "Errors began right after catalog 3.2.0 was deployed 12 minutes ago."},
+    "logs": ["catalog: ERROR search index 'products_v7' not found (configured in search.yaml)", "catalog: GET /search 500"],
+    "truth": {"component": "catalog", "cause": "bad-config-or-deploy", "actionable": true, "difficulty": "easy"}
+  },
+  {
+    "id": "S24",
+    "labels": {"alertname": "OrdersDbConnectionsHigh", "severity": "warning", "namespace": "shop", "deployment": "orders-db"},
+    "annotations": {"summary": "orders-db has 4,800 open connections (limit 5,000)", "description": "Connections climbed steadily since checkout 2.1 was deployed this morning. Checkout 2.1 opens a new database client per request instead of reusing a pool."},
+    "logs": ["orders-db: connection accepted from 10.42.0.33 (4,801 connections now open)"],
+    "truth": {"component": "checkout", "cause": "bad-config-or-deploy", "actionable": true, "difficulty": "hard"}
+  },
+  {
+    "id": "S25",
+    "labels": {"alertname": "KubeNodeNotReady", "severity": "critical", "namespace": "shop", "node": "worker-3"},
+    "annotations": {"summary": "Node worker-3 is NotReady", "description": "The kubelet stopped posting status 4 minutes ago. Pods are being rescheduled. The node's hardware log shows uncorrectable memory errors."},
+    "logs": ["kernel: EDAC MC0: 12 UE memory errors on DIMM_A2", "kubelet: node not ready: PLEG is not healthy"],
+    "truth": {"component": "cluster-platform", "cause": "hardware-fault", "actionable": true, "difficulty": "easy"}
+  },
+  {
+    "id": "S26",
+    "labels": {"alertname": "ClockSkewDetected", "severity": "warning", "namespace": "shop", "node": "worker-1"},
+    "annotations": {"summary": "Clock skew of 0.6s detected on worker-1", "description": "NTP offset above 0.5s. chrony reports the time source is reachable and is correcting the clock."},
+    "logs": ["chronyd: System clock wrong by 0.61 seconds, adjustment started"],
+    "truth": {"component": "cluster-platform", "cause": "transient-noise", "actionable": false, "difficulty": "hard"}
+  },
+  {
+    "id": "S27",
+    "labels": {"alertname": "StorefrontAuthFailures", "severity": "warning", "namespace": "shop", "deployment": "storefront"},
+    "annotations": {"summary": "401 responses from the storefront API rose to 340 per minute", "description": "All failures come from one partner API key whose secret was rotated an hour ago. The partner is still sending the old key."},
+    "logs": ["storefront: auth: invalid API key (key_id=pk_51x...) source=203.0.113.14", "storefront: auth: invalid API key (key_id=pk_51x...) source=203.0.113.14"],
+    "truth": {"component": "storefront", "cause": "bad-config-or-deploy", "actionable": true, "difficulty": "hard"}
+  },
+  {
+    "id": "S28",
+    "labels": {"alertname": "HostHighLoad", "severity": "info", "namespace": "shop", "node": "worker-2"},
+    "annotations": {"summary": "Load average 38 on worker-2", "description": "High load during the scheduled image garbage collection. Load returned to normal 8 minutes later."},
+    "logs": ["containerd: image gc started", "containerd: image gc finished, reclaimed 41 GB"],
+    "truth": {"component": "cluster-platform", "cause": "transient-noise", "actionable": false, "difficulty": "easy"}
+  },
+  {
+    "id": "S29",
+    "labels": {"alertname": "OrdersDbPrimaryElection", "severity": "warning", "namespace": "shop", "deployment": "orders-db"},
+    "annotations": {"summary": "orders-db elected a new primary", "description": "A planned failover completed in 20 seconds. The new primary is healthy and checkout errors returned to zero."},
+    "logs": ["orders-db: primary election complete, orders-db-1 is primary", "orders-db: replication caught up"],
+    "truth": {"component": "orders-db", "cause": "transient-noise", "actionable": false, "difficulty": "hard"}
+  },
+  {
+    "id": "S30",
+    "labels": {"alertname": "CheckoutHighLatency", "severity": "warning", "namespace": "shop", "deployment": "checkout"},
+    "annotations": {"summary": "checkout p95 latency is 3.1s", "description": "Checkout's own processing takes 40ms. The remaining time is spent waiting on the payments provider, whose status page says 'degraded'."},
+    "logs": ["checkout: POST /checkout 200 in 3105ms (payments 2860ms)"],
+    "truth": {"component": "payments-provider", "cause": "dependency-down", "actionable": true, "difficulty": "hard"}
+  }
+]

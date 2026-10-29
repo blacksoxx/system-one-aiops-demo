@@ -1,0 +1,8 @@
+.venv/
+.hf/
+__pycache__/
+*.pyc
+decisions.jsonl
+*.kubeconfig
+.DS_Store
+calibration.json

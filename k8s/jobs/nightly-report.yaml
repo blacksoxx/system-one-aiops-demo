@@ -1,0 +1,36 @@
+# A batch job that fails once and succeeds on retry: the "flaky-job" incident.
+# The first attempt writes a marker file on the node and exits 1; the retry finds the
+# marker and exits 0. incident.sh gives each run its own marker path.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nightly-report
+  namespace: shop
+  labels: { app: nightly-report, tier: data }
+spec:
+  backoffLimit: 3
+  template:
+    metadata: { labels: { app: nightly-report, tier: data } }
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: report
+          image: python:3.12-slim
+          command: ["sh", "-c"]
+          args:
+            - |
+              echo "$(date +%H:%M:%S) nightly-report: fetching yesterday's orders"
+              if [ -f "/marker/${RUN_ID}" ]; then
+                echo "$(date +%H:%M:%S) nightly-report: retry ok, 1,204 rows written"
+                exit 0
+              fi
+              touch "/marker/${RUN_ID}"
+              echo "$(date +%H:%M:%S) nightly-report: connection reset by peer while fetching orders"
+              exit 1
+          env:
+            - { name: RUN_ID, value: "run" }
+          resources: { requests: { cpu: 10m, memory: 32Mi }, limits: { memory: 64Mi } }
+          volumeMounts: [{ name: marker, mountPath: /marker }]
+      volumes:
+        - name: marker
+          hostPath: { path: /tmp/shop-demo-markers, type: DirectoryOrCreate }
