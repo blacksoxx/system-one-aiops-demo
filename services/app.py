@@ -10,6 +10,8 @@ command away:
                kills the container.                               -> incident "oom"
   DEPENDS_ON   comma list of name=url. If a dependency is unreachable, /healthz returns 503
                (readiness fails) and requests return 504.        -> incident "db-down"
+  CPU_BURN     run a hot loop in the background; under a tiny CPU limit the container gets
+               throttled and everything slows down.             -> incident "cpu-spike"
 
 Standard library only.
 """
@@ -17,6 +19,7 @@ Standard library only.
 import json
 import os
 import sys
+import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -49,6 +52,17 @@ if mem_hog_mb:
         if i % 50 == 49:
             log(f"cache warm-up {i + 1}/{mem_hog_mb} MiB")
         time.sleep(0.02)
+
+
+if os.environ.get("CPU_BURN"):
+    log("background job: recomputing recommendations (hot loop)")
+
+    def burn():
+        x = 0
+        while True:
+            x = (x * 1103515245 + 12345) & 0x7FFFFFFF
+
+    threading.Thread(target=burn, daemon=True).start()
 
 
 def check_dependencies():

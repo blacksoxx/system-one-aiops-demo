@@ -1,0 +1,130 @@
+# Two Grafana dashboards, loaded by the kube-prometheus-stack sidecar (label grafana_dashboard=1).
+#   01 · Alerts · today            every firing alert, as the on-call engineer sees it now
+#   02 · Alerts · triaged          the same alerts after the System One model: page / slack / noise
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shop-dashboards
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: "Alert triage"
+data:
+  01-alerts-today.json: |
+    {
+      "uid": "alerts-today",
+      "title": "01 · Alerts · today",
+      "tags": ["shop"],
+      "timezone": "browser",
+      "refresh": "5s",
+      "time": { "from": "now-15m", "to": "now" },
+      "schemaVersion": 39,
+      "templating": { "list": [] },
+      "panels": [
+        {
+          "type": "stat", "title": "Alerts firing right now", "gridPos": { "x": 0, "y": 0, "w": 6, "h": 5 },
+          "datasource": { "type": "prometheus" },
+          "targets": [{ "expr": "count(ALERTS{alertstate=\"firing\", namespace=\"shop\"}) or vector(0)", "instant": true, "refId": "A" }],
+          "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } }, "overrides": [] },
+          "options": { "colorMode": "background", "graphMode": "none", "textMode": "value", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+        },
+        {
+          "type": "stat", "title": "Critical", "gridPos": { "x": 6, "y": 0, "w": 6, "h": 5 },
+          "datasource": { "type": "prometheus" },
+          "targets": [{ "expr": "count(ALERTS{alertstate=\"firing\", namespace=\"shop\", severity=\"critical\"}) or vector(0)", "instant": true, "refId": "A" }],
+          "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } }, "overrides": [] },
+          "options": { "colorMode": "background", "graphMode": "none", "textMode": "value", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+        },
+        {
+          "type": "timeseries", "title": "Firing alerts over time", "gridPos": { "x": 12, "y": 0, "w": 12, "h": 5 },
+          "datasource": { "type": "prometheus" },
+          "targets": [{ "expr": "count(ALERTS{alertstate=\"firing\", namespace=\"shop\"}) or vector(0)", "legendFormat": "firing", "refId": "A" }],
+          "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "red" }, "custom": { "fillOpacity": 25, "lineWidth": 2 }, "min": 0 }, "overrides": [] },
+          "options": { "legend": { "showLegend": false } }
+        },
+        {
+          "type": "table", "title": "Every alert, as it arrives", "gridPos": { "x": 0, "y": 5, "w": 24, "h": 17 },
+          "datasource": { "type": "prometheus" },
+          "targets": [{ "expr": "ALERTS{alertstate=\"firing\", namespace=\"shop\"}", "instant": true, "format": "table", "refId": "A" }],
+          "transformations": [
+            { "id": "organize", "options": { "excludeByName": { "Time": true, "Value": true, "__name__": true, "alertstate": true, "namespace": true, "job": true, "instance": true, "prometheus": true, "endpoint": true, "service": true, "uid": true, "container": true, "metrics_path": true, "node": true, "id": true, "image": true, "name": true },
+              "indexByName": { "alertname": 0, "severity": 1, "deployment": 2, "pod": 3, "job_name": 4 },
+              "renameByName": { "alertname": "alert", "job_name": "job" } } }
+          ],
+          "fieldConfig": { "defaults": { "custom": { "align": "left" } }, "overrides": [
+            { "matcher": { "id": "byName", "options": "severity" }, "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-background" } },
+              { "id": "mappings", "value": [ { "type": "value", "options": { "critical": { "color": "red", "index": 0 }, "warning": { "color": "orange", "index": 1 }, "info": { "color": "blue", "index": 2 } } } ] } ] } ] },
+          "options": { "showHeader": true, "sortBy": [ { "displayName": "severity", "desc": false } ] }
+        }
+      ]
+    }
+  02-alerts-triaged.json: |
+    {
+      "uid": "alerts-triaged",
+      "title": "02 · Alerts · triaged by a System One model",
+      "tags": ["shop"],
+      "timezone": "browser",
+      "refresh": "5s",
+      "time": { "from": "now-15m", "to": "now" },
+      "schemaVersion": 39,
+      "templating": { "list": [] },
+      "panels": [
+        { "type": "stat", "title": "Alerts received", "gridPos": { "x": 0, "y": 0, "w": 4, "h": 5 }, "datasource": { "type": "prometheus" },
+          "targets": [{ "expr": "max(triage_alerts_received_total) or vector(0)", "instant": true, "refId": "A" }],
+          "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+          "options": { "colorMode": "none", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } } },
+        { "type": "stat", "title": "Folded into an existing incident", "gridPos": { "x": 4, "y": 0, "w": 4, "h": 5 }, "datasource": { "type": "prometheus" },
+          "targets": [{ "expr": "max(triage_alerts_folded_total) or vector(0)", "instant": true, "refId": "A" }],
+          "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" } }, "overrides": [] },
+          "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } } },
+        { "type": "stat", "title": "Paged on-call", "gridPos": { "x": 8, "y": 0, "w": 4, "h": 5 }, "datasource": { "type": "prometheus" },
+          "targets": [{ "expr": "max(triage_open_alerts{lane=\"page\"}) or vector(0)", "instant": true, "refId": "A" }],
+          "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } }, "overrides": [] },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } } },
+        { "type": "stat", "title": "Posted to Slack #ops", "gridPos": { "x": 12, "y": 0, "w": 4, "h": 5 }, "datasource": { "type": "prometheus" },
+          "targets": [{ "expr": "max(triage_open_alerts{lane=\"slack\"}) or vector(0)", "instant": true, "refId": "A" }],
+          "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 1 } ] } }, "overrides": [] },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } } },
+        { "type": "stat", "title": "Closed as noise", "gridPos": { "x": 16, "y": 0, "w": 4, "h": 5 }, "datasource": { "type": "prometheus" },
+          "targets": [{ "expr": "max(triage_open_alerts{lane=\"noise\"}) or vector(0)", "instant": true, "refId": "A" }],
+          "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "#8e8e8e" } }, "overrides": [] },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } } },
+        { "type": "stat", "title": "Seconds from alert to decision", "gridPos": { "x": 20, "y": 0, "w": 4, "h": 5 }, "datasource": { "type": "prometheus" },
+          "targets": [{ "expr": "max(triage_decision_latency_seconds) or vector(0)", "instant": true, "refId": "A" }],
+          "fieldConfig": { "defaults": { "unit": "s", "decimals": 1, "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+          "options": { "colorMode": "none", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } } },
+
+        { "type": "table", "title": "Page on-call · act now", "gridPos": { "x": 0, "y": 5, "w": 24, "h": 6 }, "datasource": { "type": "prometheus" },
+          "targets": [{ "expr": "triage_alert{lane=\"page\"}", "instant": true, "format": "table", "refId": "A" }],
+          "transformations": [ { "id": "organize", "options": {
+            "excludeByName": { "Time": true, "__name__": true, "lane": true, "fingerprint": true, "job": true, "instance": true, "namespace": true, "endpoint": true, "service": true, "pod": true, "container": true, "prometheus": true },
+            "indexByName": { "summary": 0, "team": 1, "component": 2, "cause": 3, "severity": 4, "Value": 5, "alertname": 6, "object": 7 },
+            "renameByName": { "Value": "confidence", "summary": "what happened", "team": "page", "severity": "urgency", "alertname": "rule" } } } ],
+          "fieldConfig": { "defaults": { "custom": { "align": "left" } }, "overrides": [
+            { "matcher": { "id": "byName", "options": "confidence" }, "properties": [ { "id": "unit", "value": "percentunit" }, { "id": "decimals", "value": 0 }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "basic" } }, { "id": "min", "value": 0 }, { "id": "max", "value": 1 }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }, { "id": "custom.width", "value": 160 } ] },
+            { "matcher": { "id": "byName", "options": "page" }, "properties": [ { "id": "custom.cellOptions", "value": { "type": "color-text" } }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] } ] },
+          "options": { "showHeader": true } },
+
+        { "type": "table", "title": "Slack #ops · look when you can (the model was not sure enough to act alone)", "gridPos": { "x": 0, "y": 11, "w": 24, "h": 7 }, "datasource": { "type": "prometheus" },
+          "targets": [{ "expr": "triage_alert{lane=\"slack\"}", "instant": true, "format": "table", "refId": "A" }],
+          "transformations": [ { "id": "organize", "options": {
+            "excludeByName": { "Time": true, "__name__": true, "lane": true, "fingerprint": true, "job": true, "instance": true, "namespace": true, "endpoint": true, "service": true, "pod": true, "container": true, "prometheus": true },
+            "indexByName": { "summary": 0, "component": 1, "cause": 2, "team": 3, "severity": 4, "Value": 5, "alertname": 6, "object": 7 },
+            "renameByName": { "Value": "confidence", "summary": "what happened", "component": "best guess", "team": "would go to", "severity": "urgency", "alertname": "rule" } } } ],
+          "fieldConfig": { "defaults": { "custom": { "align": "left" } }, "overrides": [
+            { "matcher": { "id": "byName", "options": "confidence" }, "properties": [ { "id": "unit", "value": "percentunit" }, { "id": "decimals", "value": 0 }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "basic" } }, { "id": "min", "value": 0 }, { "id": "max", "value": 1 }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }, { "id": "custom.width", "value": 160 } ] } ] },
+          "options": { "showHeader": true } },
+
+        { "type": "table", "title": "Closed as noise · nobody paged, kept for audit", "gridPos": { "x": 0, "y": 18, "w": 24, "h": 5 }, "datasource": { "type": "prometheus" },
+          "targets": [{ "expr": "triage_alert{lane=\"noise\"}", "instant": true, "format": "table", "refId": "A" }],
+          "transformations": [ { "id": "organize", "options": {
+            "excludeByName": { "Time": true, "__name__": true, "lane": true, "fingerprint": true, "job": true, "instance": true, "namespace": true, "endpoint": true, "service": true, "pod": true, "container": true, "prometheus": true, "team": true, "severity": true },
+            "indexByName": { "summary": 0, "component": 1, "cause": 2, "Value": 3, "alertname": 4, "object": 5 },
+            "renameByName": { "Value": "confidence", "summary": "what happened", "alertname": "rule" } } } ],
+          "fieldConfig": { "defaults": { "custom": { "align": "left" }, "color": { "mode": "fixed", "fixedColor": "#8e8e8e" } }, "overrides": [
+            { "matcher": { "id": "byName", "options": "confidence" }, "properties": [ { "id": "unit", "value": "percentunit" }, { "id": "decimals", "value": 0 }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "basic" } }, { "id": "min", "value": 0 }, { "id": "max", "value": 1 }, { "id": "custom.width", "value": 160 } ] } ] },
+          "options": { "showHeader": true } }
+      ]
+    }

@@ -1,0 +1,69 @@
+# kube-prometheus-stack tuned for a live demo: fast scrape and evaluation, alerts grouped
+# within seconds, no default rule set (the demo's own rules live in rules.yaml), Grafana
+# open to viewers without a login, dashboards loaded from ConfigMaps by the sidecar.
+defaultRules:
+  create: false
+
+alertmanager:
+  config:
+    global:
+      resolve_timeout: 1m
+    route:
+      receiver: triage
+      group_by: ['alertname', 'namespace', 'deployment', 'pod', 'job_name']
+      group_wait: 5s
+      group_interval: 10s
+      repeat_interval: 3h
+      routes: []          # drop the chart's default sub-routes (they point at the "null" receiver)
+    receivers:
+      - name: "null"      # the chart's default route still references it; keep it defined
+      - name: triage
+        webhook_configs:
+          - url: http://triage.shop.svc:8400/alerts
+            send_resolved: true
+  alertmanagerSpec:
+    retention: 6h
+
+prometheus:
+  prometheusSpec:
+    scrapeInterval: 10s
+    evaluationInterval: 10s
+    retention: 6h
+    ruleSelectorNilUsesHelmValues: false
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+
+grafana:
+  adminPassword: triage
+  defaultDashboardsEnabled: false
+  grafana.ini:
+    auth.anonymous:
+      enabled: true
+      org_role: Viewer
+    users:
+      default_theme: dark
+    dashboards:
+      min_refresh_interval: 2s
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+      folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: true
+
+nodeExporter:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+coreDns:
+  enabled: false

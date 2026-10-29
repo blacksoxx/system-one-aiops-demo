@@ -1,0 +1,69 @@
+# The triage service: receives Alertmanager webhooks, asks the System One model, exposes the
+# result as Prometheus metrics for Grafana and as its own board page. demo.sh creates the
+# ConfigMap `triage-code` (triage.py, triage_service.py, taxonomy.json, calibration.json) and
+# the `laya` Service that points at the model server running on the host.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: triage, namespace: shop }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: triage-reader, namespace: shop }
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: triage-reader, namespace: shop }
+subjects: [{ kind: ServiceAccount, name: triage, namespace: shop }]
+roleRef: { kind: Role, name: triage-reader, apiGroup: rbac.authorization.k8s.io }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: triage, namespace: shop, labels: { app: triage } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: triage } }
+  template:
+    metadata: { labels: { app: triage } }
+    spec:
+      serviceAccountName: triage
+      containers:
+        - name: triage
+          image: python:3.12-slim
+          command: ["python3", "-u", "/app/triage_service.py"]
+          env:
+            - { name: SYSTEMONE_BASE_URL, value: "http://laya:__LAYA_PORT__/v1" }
+            - { name: SYSTEMONE_MODEL, value: "typed-decisions" }
+            - { name: TRIAGE_THRESHOLD, value: "__THRESHOLD__" }
+            - { name: TRIAGE_NAMESPACE, value: shop }
+          envFrom:
+            - secretRef: { name: llm, optional: true }
+          ports: [{ name: http, containerPort: 8400 }]
+          readinessProbe: { httpGet: { path: /healthz, port: 8400 }, periodSeconds: 5 }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { memory: 256Mi } }
+          volumeMounts: [{ name: code, mountPath: /app }]
+      volumes: [{ name: code, configMap: { name: triage-code } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: triage, namespace: shop, labels: { app: triage } }
+spec:
+  selector: { app: triage }
+  ports: [{ name: http, port: 8400, targetPort: 8400 }]
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata: { name: triage, namespace: shop, labels: { release: mon } }
+spec:
+  selector: { matchLabels: { app: triage } }
+  endpoints: [{ port: http, interval: 5s, path: /metrics }]

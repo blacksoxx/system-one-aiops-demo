@@ -1,0 +1,81 @@
+# Alert rules for the shop, deliberately shaped like a real team's rule set: one incident fires
+# several alerts (the deployment, each pod, the restart counter), which is exactly the flood the
+# "Alerts · today" dashboard shows and the triage service folds back into incidents.
+# Timers are short so the demo moves; production rules would use minutes, not seconds.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: shop-alerts
+  namespace: shop
+  labels:
+    release: mon
+spec:
+  groups:
+    - name: shop
+      interval: 10s
+      rules:
+        - alert: KubePodOOMKilled
+          expr: |
+            kube_pod_container_status_last_terminated_reason{namespace="shop", reason="OOMKilled"} == 1
+            and on (namespace, pod, container)
+            increase(kube_pod_container_status_restarts_total{namespace="shop"}[10m]) > 0
+          labels: { severity: critical }
+          annotations:
+            summary: "Container {{ $labels.container }} in pod {{ $labels.pod }} was OOMKilled"
+            description: "The container exceeded its memory limit and was killed."
+        - alert: KubePodCrashLooping
+          expr: kube_pod_container_status_waiting_reason{namespace="shop", reason="CrashLoopBackOff"} == 1
+          for: 20s
+          labels: { severity: warning }
+          annotations:
+            summary: "Pod {{ $labels.pod }} is crash looping"
+            description: "Container {{ $labels.container }} keeps exiting shortly after start."
+        - alert: KubeContainerImagePullFailed
+          expr: kube_pod_container_status_waiting_reason{namespace="shop", reason=~"ImagePullBackOff|ErrImagePull"} == 1
+          for: 20s
+          labels: { severity: warning }
+          annotations:
+            summary: "Pod {{ $labels.pod }} cannot pull its image"
+            description: "Container {{ $labels.container }} is waiting on an image that cannot be pulled."
+        - alert: KubeDeploymentReplicasUnavailable
+          expr: |
+            (kube_deployment_spec_replicas{namespace="shop"} > 0)
+            and (kube_deployment_status_replicas_available{namespace="shop"} < kube_deployment_spec_replicas{namespace="shop"})
+          for: 30s
+          labels: { severity: critical }
+          annotations:
+            summary: "Deployment {{ $labels.deployment }} has unavailable replicas"
+            description: "Fewer replicas are available than desired."
+        - alert: KubePodNotReady
+          expr: |
+            kube_pod_status_ready{namespace="shop", condition="false"} == 1
+            and on (namespace, pod) kube_pod_status_phase{namespace="shop", phase="Running"} == 1
+          for: 45s
+          labels: { severity: warning }
+          annotations:
+            summary: "Pod {{ $labels.pod }} is not ready"
+            description: "The pod is running but failing its readiness probe."
+        - alert: KubePodRestartingOften
+          expr: increase(kube_pod_container_status_restarts_total{namespace="shop"}[5m]) > 2
+          for: 30s
+          labels: { severity: warning }
+          annotations:
+            summary: "Pod {{ $labels.pod }} restarted {{ $value | humanize }} times in 10 minutes"
+            description: "Container {{ $labels.container }} is restarting repeatedly."
+        - alert: KubeJobFailed
+          expr: kube_job_status_failed{namespace="shop"} > 0
+          for: 15s
+          labels: { severity: warning }
+          annotations:
+            summary: "Job {{ $labels.job_name }} failed"
+            description: "At least one attempt of the job failed."
+        - alert: CPUThrottlingHigh
+          expr: |
+            sum by (namespace, pod, container) (rate(container_cpu_cfs_throttled_periods_total{namespace="shop", container!=""}[2m]))
+              /
+            sum by (namespace, pod, container) (rate(container_cpu_cfs_periods_total{namespace="shop", container!=""}[2m])) > 0.25
+          for: 30s
+          labels: { severity: info }
+          annotations:
+            summary: "Container {{ $labels.container }} in {{ $labels.pod }} is CPU throttled"
+            description: "More than 25% of CPU periods are throttled."
