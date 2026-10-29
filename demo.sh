@@ -11,8 +11,7 @@
 # Environment (all optional)
 #   CLUSTER=shop                       kind cluster name
 #   KUBECONFIG_FILE=~/.kube/shop-kind.yaml   kept separate from any other cluster you have
-#   LAYA_PORT=8000                     where your model server listens
-#   LAYA_HOST_IP=<ip>                  model server on another machine (e.g. a GPU box reachable from here)
+#   LAYA_PORT=8000                     where your model server listens on this machine
 #   THRESHOLD=0.6                      act alone at or above this confidence
 #   LLM_API_KEY                        optional: Claude (Anthropic) key -> notes for the Slack lane and an
 #                                      "LLM alone" comparison on every alert. LLM_MODEL defaults to claude-opus-5-5.
@@ -60,7 +59,7 @@ case "${1:-}" in
     echo "   shop ready"
 
     echo "== wiring the model server on this machine into the cluster"
-    ip="${LAYA_HOST_IP:-$(host_ip)}"
+    ip=$(host_ip)
     [ -n "$ip" ] || { echo "could not determine the host IP from inside the cluster"; exit 1; }
     cat <<EOF | kubectl apply -f - >/dev/null
 apiVersion: v1
