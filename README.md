@@ -84,7 +84,7 @@ Open **http://localhost:3000/d/alerts-today** and **http://localhost:3000/d/aler
 export KUBECONFIG=~/.kube/shop-kind.yaml
 ./chaos.sh storm            # five incidents within a minute
 ./chaos.sh heal             # when you have seen enough
-./demo.sh reset             # zero the triage counters and lanes before the next run
+./demo.sh reset             # heal every incident, then zero the triage counters before the next run
 ```
 
 Monitoring takes 30–90 s to notice, like in real life. Then dashboard 01 fills with red, and
